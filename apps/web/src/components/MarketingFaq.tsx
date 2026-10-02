@@ -1,149 +1,93 @@
 'use client';
 
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { useTranslation } from '@/lib/i18n';
-import { useReducedMotionSafe } from '@/lib/use-reduced-motion-safe';
-import { API_BASE_URL } from '@/lib/utils';
-import { Plus } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, HelpCircle } from 'lucide-react';
 
-const EASE = [0.16, 1, 0.3, 1] as const;
-
-interface FaqItem {
-  q: { id: string; en: string };
-  a: { id: string; en: string };
-}
-
-const FAQS: FaqItem[] = [
+const FAQS = [
   {
-    q: { id: 'Kenapa pakai Morphic, bukan langsung ke provider?', en: 'Why Morphic instead of going to each provider?' },
-    a: {
-      id: 'Provider resmi biasanya minta kartu kredit internasional dan bayar dalam USD. Di Morphic Anda top up Rupiah via QRIS, pakai satu key untuk semua model, dan cek satu saldo saja.',
-      en: 'Official providers usually want an international card and bill in USD. With Morphic you top up in Rupiah with QRIS, use one key for every model, and track a single balance.',
-    },
+    q: 'Mengapa saya membutuhkan API Key reseller dari Morphic?',
+    a: 'Sebagian besar provider AI resmi (OpenAI, DeepSeek, Moonshot) mewajibkan kartu kredit internasional dengan kurs USD dan rate-limit yang ketat. Morphic menjembatani hal ini dengan menyediakan pembayaran lokal QRIS (Rupiah), endpoint tunggal OpenAI-compatible, rate limit tinggi untuk coding agent, serta sistem saldo gabungan (Unified Credits).',
   },
   {
-    q: { id: 'Bagaimana cara pasang di Cursor atau Cline?', en: 'How do I set it up in Cursor or Cline?' },
-    a: {
-      id: `Pilih provider "OpenAI Compatible", isi Base URL dengan ${API_BASE_URL}, lalu tempel API key Morphic Anda (mp-...). Selesai.`,
-      en: `Choose the "OpenAI Compatible" provider, set the Base URL to ${API_BASE_URL}, and paste your Morphic API key (mp-...). That's it.`,
-    },
+    q: 'Bagaimana cara menggunakan API Key di Cursor atau Cline?',
+    a: 'Sangat mudah! Di pengaturan Cursor atau ekstensi Cline, pilih provider "OpenAI Compatible", ubah Base URL menjadi https://api.morphic.xxx/v1, dan masukkan API Key Morphic (mp-xxxx) Anda. Semua request langsung diteruskan ke model AI pilihan Anda.',
   },
   {
-    q: { id: 'Bayar pakai apa? Berapa lama saldo masuk?', en: 'How do I pay, and how fast do credits arrive?' },
-    a: {
-      id: 'Scan QRIS dari GoPay, OVO, Dana, ShopeePay, BCA, Mandiri, atau m-banking lain. Pembayaran terkonfirmasi otomatis dan saldo masuk dalam hitungan detik.',
-      en: 'Scan the QRIS code with GoPay, OVO, Dana, ShopeePay, BCA, Mandiri or any banking app. Payment confirms automatically and credits land in seconds.',
-    },
+    q: 'Apakah pembayaran mendukung QRIS instan?',
+    a: 'Ya, 100% otomatis dan instan. Anda dapat membayar menggunakan GoPay, OVO, Dana, ShopeePay, BCA Mobile, Livin Mandiri, atau aplikasi e-wallet dan mobile banking apa pun yang mendukung QRIS. Kredit langsung aktif hitungan detik.',
   },
   {
-    q: { id: 'Apakah kode dan prompt saya disimpan?', en: 'Do you store my code or prompts?' },
-    a: {
-      id: 'Tidak. Request diteruskan ke provider tanpa disimpan dan tidak dipakai untuk melatih model. API key dienkripsi, dan Anda bisa revoke key kapan saja dari dashboard.',
-      en: 'No. Requests pass through to the provider without being stored or used for training. API keys are encrypted, and you can revoke any key from the dashboard.',
-    },
+    q: 'Apakah kredit yang saya beli memiliki batas kedaluwarsa?',
+    a: 'Paket kredit standar berlaku 30 hari dan masa aktif akan diakumulasi/diperpanjang otomatis setiap kali Anda melakukan top-up paket baru. Tidak ada saldo yang hangus sia-sia jika Anda aktif menggunakannya.',
   },
   {
-    q: { id: 'Berapa banyak API key yang bisa dibuat?', en: 'How many API keys can I create?' },
-    a: {
-      id: 'Paket Starter Dev sampai 3 key. Paket Pro Agent ke atas tanpa batas. Beri label tiap key, misalnya "Cursor" atau "Production", supaya mudah dilacak.',
-      en: 'Starter Dev allows up to 3 keys. Pro Agent and above are unlimited. Label each one, say "Cursor" or "Production", so usage stays easy to track.',
-    },
+    q: 'Apakah kode dan data prompt saya aman dan privat?',
+    a: 'Morphic beroperasi sebagai proxy gateway berperforma tinggi tanpa menyimpan atau melatih ulang data prompt Anda ke pihak ketiga mana pun. Kunci API Anda dienkripsi secara aman dan Anda memiliki kendali penuh untuk me-revoke (mencabut) API Key kapan saja via dashboard.',
+  },
+  {
+    q: 'Berapa banyak API Key yang bisa saya buat?',
+    a: 'Anda bisa membuat banyak API Key tanpa batas tambahan melalui menu API Keys di Dashboard. Setiap key dapat diberi nama label spesifik (misal: "Cursor Work", "Cline Laptop", "Production API") agar pemakaiannya terlacak rapi.',
   },
 ];
 
 export default function MarketingFaq() {
-  const { locale, t } = useTranslation();
   const [openIndex, setOpenIndex] = useState<number | null>(0);
-  const reduced = useReducedMotionSafe();
 
   const toggle = (idx: number) => {
     setOpenIndex(openIndex === idx ? null : idx);
   };
 
   return (
-    <section id="faq" className="relative z-10 py-14 lg:py-20 px-6 bg-[#fafafa] text-neutral-900 border-t border-neutral-200/70 scroll-mt-20 sm:scroll-mt-24">
-      <div className="max-w-6xl mx-auto grid gap-12 lg:grid-cols-[0.7fr_1.3fr] items-start">
-        {/* Left Column: Sticky Header */}
-        <motion.div
-          initial={reduced ? false : { opacity: 0, y: 14 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-50px' }}
-          transition={{ duration: 0.5, ease: EASE }}
-          className="lg:sticky lg:top-32 lg:self-start"
-        >
-          <div className="text-xs sm:text-sm font-mono uppercase tracking-[0.2em] text-neutral-500 font-bold mb-3">
-            {t.faq.badge}
+    <section id="faq" className="relative z-10 py-24 px-4 sm:px-6 bg-white text-neutral-900 border-t border-neutral-200/80 content-deferred">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="text-center max-w-2xl mx-auto mb-16">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-neutral-100 border border-neutral-200 text-neutral-800 text-xs font-semibold mb-4 shadow-sm">
+            <HelpCircle className="h-3.5 w-3.5 text-neutral-900" />
+            <span>Tanya Jawab Seputar Layanan</span>
           </div>
 
-          <h2 suppressHydrationWarning className="text-4xl sm:text-5xl lg:text-6xl font-heading font-extrabold tracking-tight mb-4 text-neutral-950">
-            {t.faq.title}
+          <h2 className="text-3xl md:text-5xl font-heading font-extrabold tracking-tight mb-4 text-neutral-950">
+            Pertanyaan yang Sering Diajukan
           </h2>
 
-          <p suppressHydrationWarning className="text-neutral-600 font-body text-base sm:text-lg leading-relaxed max-w-sm">
-            {t.faq.desc}
+          <p className="text-neutral-600 font-body text-sm md:text-base">
+            Segala hal yang perlu Anda ketahui tentang kemudahan, keamanan, dan keunggulan API Key Morphic.
           </p>
-        </motion.div>
+        </div>
 
-        {/* Right Column: Numbered Hairline Accordion List */}
-        <motion.div
-          initial={reduced ? false : { opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: '-40px' }}
-          transition={{ duration: 0.55, delay: 0.1, ease: EASE }}
-          className="border-t border-neutral-200 divide-y divide-neutral-200"
-        >
+        {/* Accordion list */}
+        <div className="space-y-4">
           {FAQS.map((faq, idx) => {
             const isOpen = openIndex === idx;
-            const question = faq.q[locale] || faq.q.en || faq.q.id;
-            const answer = faq.a[locale] || faq.a.en || faq.a.id;
-
             return (
               <div
                 key={idx}
-                className="transition-colors"
+                className="rounded-2xl border border-neutral-200/80 bg-neutral-50/50 overflow-hidden transition-all duration-200 hover:border-neutral-300"
               >
                 <button
-                  type="button"
                   onClick={() => toggle(idx)}
-                  aria-expanded={isOpen}
-                  className="w-full py-6 sm:py-7 text-left flex items-center justify-between gap-6 cursor-pointer group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
+                  className="w-full p-6 text-left flex items-center justify-between gap-4 hover:bg-neutral-100/50 cursor-pointer transition-colors"
                 >
-                  <span className="flex items-baseline gap-4 min-w-0 pr-2">
-                    <span className={`font-mono text-sm tabular-nums shrink-0 transition-colors ${isOpen ? 'text-neutral-950 font-bold' : 'text-neutral-500 group-hover:text-neutral-700'}`}>
-                      {String(idx + 1).padStart(2, '0')}
-                    </span>
-                    <span suppressHydrationWarning className={`font-heading text-lg sm:text-xl tracking-tight transition-colors ${
-                      isOpen ? 'text-neutral-950 font-bold' : 'text-neutral-800 font-semibold group-hover:text-neutral-950'
-                    }`}>
-                      {question}
-                    </span>
+                  <span className="font-heading font-bold text-base md:text-lg text-neutral-950">
+                    {faq.q}
                   </span>
-
-                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-all duration-300 ${
-                    isOpen
-                      ? 'border-neutral-950 bg-neutral-950 text-white rotate-45 shadow-xs'
-                      : 'border-neutral-200 bg-white text-neutral-500 group-hover:border-neutral-400 group-hover:text-neutral-900'
-                  }`}>
-                    <Plus className="h-4.5 w-4.5" />
-                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 text-neutral-500 shrink-0 transition-transform duration-200 ${
+                      isOpen ? 'rotate-180 text-neutral-950' : ''
+                    }`}
+                  />
                 </button>
 
-                <div
-                  className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                    isOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-                  }`}
-                >
-                  <div className="overflow-hidden">
-                    <div suppressHydrationWarning className="pb-7 pl-8 pr-4 text-sm sm:text-base text-neutral-600 font-body leading-relaxed">
-                      {answer}
-                    </div>
+                {isOpen && (
+                  <div className="px-6 pb-6 text-xs md:text-sm text-neutral-600 font-body leading-relaxed border-t border-neutral-200/60 pt-4 bg-white">
+                    {faq.a}
                   </div>
-                </div>
+                )}
               </div>
             );
           })}
-        </motion.div>
+        </div>
       </div>
     </section>
   );

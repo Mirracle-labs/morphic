@@ -9,6 +9,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  pgEnum,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -40,9 +41,6 @@ export const sessions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    // How this session was created. 'api_key' sessions are minted by trading an mp-* key
-    // and are restricted to read-only routes (audit H7); interactive logins leave this null.
-    authMethod: text('auth_method'),
     createdAt: now(),
     updatedAt: updatedAt(),
   },
@@ -88,9 +86,7 @@ export const apiKeys = pgTable(
     name: text('name').notNull(),
     keyHash: text('key_hash').notNull().unique(),
     keyPrefix: text('key_prefix').notNull(),
-    encryptedKey: text('encrypted_key'),
     status: text('status', { enum: ['active', 'revoked'] }).notNull().default('active'),
-    expiresAt: timestamp('expires_at', { withTimezone: true }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     createdAt: now(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -107,15 +103,6 @@ export const providers = pgTable('providers', {
   encryptedCredentials: text('encrypted_credentials'),
   credentialReference: text('credential_reference'),
   status: text('status', { enum: ['active', 'disabled'] }).notNull().default('active'),
-  circuitBreakerState: jsonb('circuit_breaker_state')
-    .$type<{
-      state: 'closed' | 'open' | 'half-open';
-      failures: number;
-      openUntil: string | null;
-      lastFailure: string | null;
-    }>()
-    .notNull()
-    .default({ state: 'closed', failures: 0, openUntil: null, lastFailure: null }),
   createdAt: now(),
   updatedAt: updatedAt(),
 });
@@ -137,43 +124,11 @@ export const models = pgTable(
     outputCreditsPer1m: integer('output_credits_per_1m').notNull(),
     providerCostInputPer1m: integer('provider_cost_input_per_1m'),
     providerCostOutputPer1m: integer('provider_cost_output_per_1m'),
-    status: text('status', { enum: ['active', 'inactive', 'deprecated'] }).notNull().default('active'),
-    replacementModelAlias: text('replacement_model_alias'),
-    fallbackProviderId: uuid('fallback_provider_id').references(() => providers.id, {
-      onDelete: 'set null',
-    }),
+    status: text('status', { enum: ['active', 'inactive'] }).notNull().default('active'),
     createdAt: now(),
     updatedAt: updatedAt(),
   },
   (t) => [index('models_provider_idx').on(t.providerId)],
-);
-
-// ── Request Logs (Observability) ─────────────────────
-
-export const requestLogs = pgTable(
-  'request_logs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    requestId: text('request_id').notNull().unique(),
-    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
-    apiKeyId: uuid('api_key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
-    modelAlias: text('model_alias').notNull(),
-    resolvedModelId: uuid('resolved_model_id').references(() => models.id, { onDelete: 'set null' }),
-    providerName: text('provider_name'),
-    promptTokens: integer('prompt_tokens'),
-    completionTokens: integer('completion_tokens'),
-    creditsConsumed: bigint('credits_consumed', { mode: 'number' }),
-    latencyMs: integer('latency_ms'),
-    gatewayLatencyMs: integer('gateway_latency_ms'),
-    status: text('status', { enum: ['success', 'error', 'cancelled'] }).notNull(),
-    errorType: text('error_type'),
-    streamed: boolean('streamed').notNull().default(false),
-    createdAt: now(),
-  },
-  (t) => [
-    index('req_logs_user_idx').on(t.userId),
-    index('req_logs_created_idx').on(t.createdAt),
-  ],
 );
 
 // ── Billing: balances (cache) / ledger (truth) ────────
@@ -330,13 +285,10 @@ export const payments = pgTable(
     amountCents: integer('amount_cents').notNull(),
     currency: text('currency').notNull().default('IDR'),
     credits: bigint('credits', { mode: 'number' }).notNull(),
-    status: text('status', {
-      enum: ['pending', 'capturing', 'paid', 'pending_paypal', 'failed', 'expired', 'refunded'],
-    })
+    status: text('status', { enum: ['pending', 'paid', 'failed', 'expired', 'refunded'] })
       .notNull()
       .default('pending'),
     paidAt: timestamp('paid_at', { withTimezone: true }),
-    capturedAt: timestamp('captured_at', { withTimezone: true }),
     createdAt: now(),
   },
   (t) => [index('payments_user_idx').on(t.userId)],
@@ -411,25 +363,16 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   entitlements: many(entitlements),
   usage: many(usageRecords),
   payments: many(payments),
-  requestLogs: many(requestLogs),
 }));
 
 export const providersRelations = relations(providers, ({ many }) => ({
   models: many(models),
 }));
 
-export const modelsRelations = relations(models, ({ one, many }) => ({
+export const modelsRelations = relations(models, ({ one }) => ({
   provider: one(providers, { fields: [models.providerId], references: [providers.id] }),
-  fallbackProvider: one(providers, { fields: [models.fallbackProviderId], references: [providers.id] }),
-  requestLogs: many(requestLogs),
 }));
 
 export const packagesRelations = relations(packages, ({ one }) => ({
   model: one(models, { fields: [packages.modelId], references: [models.id] }),
-}));
-
-export const requestLogsRelations = relations(requestLogs, ({ one }) => ({
-  user: one(users, { fields: [requestLogs.userId], references: [users.id] }),
-  apiKey: one(apiKeys, { fields: [requestLogs.apiKeyId], references: [apiKeys.id] }),
-  resolvedModel: one(models, { fields: [requestLogs.resolvedModelId], references: [models.id] }),
 }));

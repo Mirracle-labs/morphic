@@ -1,11 +1,8 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
-  outDir: 'dist',
+  entry: ['src/index.ts'],
   format: ['esm'],
   clean: true,
-  bundle: true,
-  splitting: false,
   noExternal: ['@morphic/db', '@morphic/shared'],
 });

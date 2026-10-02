@@ -15,27 +15,6 @@
       "when": 1788685285724,
       "tag": "0001_long_demogoblin",
       "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1788994709052,
-      "tag": "0002_melted_hex",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1790152950972,
-      "tag": "0003_exotic_rafael_vega",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1790396540145,
-      "tag": "0004_violet_praxagora",
-      "breakpoints": true
     }
   ]
 }

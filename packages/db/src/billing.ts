@@ -1,5 +1,5 @@
-import { and, eq, gt, inArray, lt, sql } from 'drizzle-orm';
-import { db, withTransaction } from './index.ts';
+import { and, eq, gt, lt, sql } from 'drizzle-orm';
+import { db } from './index.ts';
 import * as s from './schema.ts';
 import {
   estimateReservation,
@@ -125,7 +125,7 @@ export async function reserve(input: {
     pricing: input.model.pricing,
   });
 
-  return withTransaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const source = await pickSource(tx, input.userId, input.model.id, estimatedCredits);
     if (!source) {
       throw new InsufficientCreditsError(
@@ -207,7 +207,7 @@ export async function settle(input: {
   const charged = Math.min(actualCredits, input.reservation.estimatedCredits);
   const refunded = input.reservation.estimatedCredits - charged;
 
-  return withTransaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const [res] = await tx
       .select()
       .from(s.reservations)
@@ -280,7 +280,7 @@ export async function settle(input: {
 }
 
 export async function release(reservationId: string, reference?: string): Promise<void> {
-  await withTransaction(async (tx) => {
+  await db.transaction(async (tx) => {
     const [res] = await tx
       .select()
       .from(s.reservations)
@@ -321,61 +321,43 @@ export async function release(reservationId: string, reference?: string): Promis
 
 /** Crash safety: auto-release reservations that outlived their TTL. */
 export async function sweepExpiredReservations(): Promise<number> {
-  try {
-    const expired = await db
-      .select({ id: s.reservations.id })
-      .from(s.reservations)
-      .where(and(eq(s.reservations.status, 'reserved'), lt(s.reservations.expiresAt, new Date())));
-    for (const r of expired) {
-      await release(r.id, 'sweep-expired');
-    }
-    return expired.length;
-  } catch (err) {
-    console.warn('[sweepExpiredReservations] Non-fatal transient error during sweep:', err);
-    return 0;
+  const expired = await db
+    .select({ id: s.reservations.id })
+    .from(s.reservations)
+    .where(and(eq(s.reservations.status, 'reserved'), lt(s.reservations.expiresAt, new Date())));
+  for (const r of expired) {
+    await release(r.id, 'sweep-expired');
   }
+  return expired.length;
 }
 
 /** Grant credits (purchase/redeem/admin). One tx: ledger + balance cache. */
-export async function grantCredits(
-  input: {
-    userId: string;
-    amount: number;
-    entryType: 'purchase' | 'redeem' | 'admin_adjustment' | 'promotion' | 'refund';
-    reference?: string;
-  },
-  outerTx?: Parameters<Parameters<typeof db.transaction>[0]>[0],
-): Promise<void> {
-  const runner = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+export async function grantCredits(input: {
+  userId: string;
+  amount: number;
+  entryType: 'purchase' | 'redeem' | 'admin_adjustment' | 'promotion' | 'refund';
+  reference?: string;
+}): Promise<void> {
+  await db.transaction(async (tx) => {
     await writeBalanceLedger(tx, {
       userId: input.userId,
       entryType: input.entryType,
       amount: input.amount,
       reference: input.reference ?? null,
     });
-  };
-
-  if (outerTx) {
-    await runner(outerTx);
-  } else {
-    await withTransaction(runner);
-  }
+  });
 }
 
 /** Grant a model/package entitlement. */
-export async function grantEntitlement(
-  input: {
-    userId: string;
-    allowance: number;
-    modelId?: string | null;
-    durationHours?: number | null;
-    source: 'purchase' | 'redeem' | 'admin' | 'promotion';
-    packageId?: string | null;
-  },
-  outerTx?: Parameters<Parameters<typeof db.transaction>[0]>[0],
-): Promise<string> {
-  const executor = outerTx ?? db;
-  const [ent] = await executor
+export async function grantEntitlement(input: {
+  userId: string;
+  allowance: number;
+  modelId?: string | null;
+  durationHours?: number | null;
+  source: 'purchase' | 'redeem' | 'admin' | 'promotion';
+  packageId?: string | null;
+}): Promise<string> {
+  const [ent] = await db
     .insert(s.entitlements)
     .values({
       userId: input.userId,
@@ -390,131 +372,10 @@ export async function grantEntitlement(
   return ent!.id;
 }
 
-/**
- * Safely update payment status to failed, expired, or pending_paypal ONLY IF current status is open.
- * Never overwrites terminal status 'paid'.
- */
-export async function markPaymentIfOpen(
-  paymentId: string,
-  status: 'failed' | 'expired' | 'pending_paypal',
-  outerTx?: Parameters<Parameters<typeof db.transaction>[0]>[0],
-): Promise<boolean> {
-  const executor = outerTx ?? db;
-  const [updated] = await executor
-    .update(s.payments)
-    .set({ status })
-    .where(
-      and(
-        eq(s.payments.id, paymentId),
-        inArray(s.payments.status, ['pending', 'pending_paypal', 'capturing']),
-      ),
-    )
-    .returning({ id: s.payments.id });
-
-  return Boolean(updated);
-}
-
-/**
- * Atomically marks a payment as paid AND grants credits/entitlement in a single DB transaction.
- * Supports locking from 'pending', 'pending_paypal', 'capturing', 'failed', or 'expired' (rescue).
- * If granting credits fails, status update is automatically rolled back.
- * Returns { success, credits, alreadyPaid }.
- */
-export async function processPaymentSuccess(
-  paymentId: string,
-  outerTx?: Parameters<Parameters<typeof db.transaction>[0]>[0],
-): Promise<{ success: boolean; credits: number; alreadyPaid?: boolean }> {
-  const runner = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-    // Step 1: Atomically lock payment row to 'paid' status if currently in open/rescueable state
-    const [locked] = await tx
-      .update(s.payments)
-      .set({ status: 'paid', paidAt: new Date() })
-      .where(
-        and(
-          eq(s.payments.id, paymentId),
-          inArray(s.payments.status, ['pending', 'pending_paypal', 'capturing', 'failed', 'expired']),
-        ),
-      )
-      .returning();
-
-    // Step 2: Handle collision / non-locking case
-    if (!locked) {
-      const [existing] = await tx
-        .select()
-        .from(s.payments)
-        .where(eq(s.payments.id, paymentId))
-        .limit(1);
-
-      if (existing?.status === 'paid') {
-        return { success: true, credits: existing.credits, alreadyPaid: true };
-      }
-      return { success: false, credits: 0 };
-    }
-
-    // Step 3: Verify package exists if payment is tied to a packageId
-    if (locked.packageId) {
-      const [pkg] = await tx
-        .select()
-        .from(s.packages)
-        .where(eq(s.packages.id, locked.packageId))
-        .limit(1);
-
-      if (!pkg) {
-        throw new Error(`Package ${locked.packageId} not found for payment ${locked.id}`);
-      }
-
-      // Step 4: Grant model-specific entitlement or standard credit balance based on snapshot locked.credits
-      if (pkg.modelId) {
-        await grantEntitlement(
-          {
-            userId: locked.userId,
-            allowance: locked.credits, // Use snapshot locked.credits at purchase time
-            modelId: pkg.modelId,
-            durationHours: pkg.durationHours,
-            source: 'purchase',
-            packageId: pkg.id,
-          },
-          tx,
-        );
-      } else {
-        await grantCredits(
-          {
-            userId: locked.userId,
-            amount: locked.credits, // Use snapshot locked.credits at purchase time
-            entryType: 'purchase',
-            reference: `payment:${locked.id}`,
-          },
-          tx,
-        );
-      }
-    } else {
-      // Step 5: Grant standard credit balance directly using payment locked.credits snapshot
-      await grantCredits(
-        {
-          userId: locked.userId,
-          amount: locked.credits,
-          entryType: 'purchase',
-          reference: `payment:${locked.id}`,
-        },
-        tx,
-      );
-    }
-
-    return { success: true, credits: locked.credits };
-  };
-
-  if (outerTx) {
-    return runner(outerTx);
-  } else {
-    return withTransaction(runner);
-  }
-}
-
-
 /** Rebuild balance cache from ledger (reconcile / drift repair). Balance-sourced entries only. */
 export async function reconcileBalance(userId: string): Promise<number> {
   const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${s.creditLedger.amount}), 0)::bigint` })
+    .select({ total: sql<number>`coalesce(sum(${s.creditLedger.amount}), 0)::int` })
     .from(s.creditLedger)
     .where(and(eq(s.creditLedger.userId, userId), eq(s.creditLedger.sourceType, 'balance')));
   const total = Number(row?.total ?? 0);

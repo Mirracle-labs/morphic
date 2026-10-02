@@ -3,41 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "!.next/standalone/**", "dist/**"],
-      "env": [
-        "NODE_ENV",
-        "DATABASE_URL",
-        "BETTER_AUTH_SECRET",
-        "BETTER_AUTH_URL",
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_SECRET",
-        "API_PORT",
-        "PROVIDER_ENC_KEY",
-        "INTERNAL_API_SECRET",
-        "HARD_RESERVE_CAP",
-        "RESERVATION_TTL_MINUTES",
-        "DAHL_API_KEY",
-        "MOCK_PAYMENT_WEBHOOK_SECRET",
-        "DUITKU_MERCHANT_CODE",
-        "DUITKU_API_KEY",
-        "DUITKU_ENV",
-        "NEXT_PUBLIC_APP_URL",
-        "NEXT_PUBLIC_API_URL",
-        "REDIS_URL",
-        "UPSTREAM_TIMEOUT_MS",
-        "PAYPAL_CLIENT_ID",
-        "PAYPAL_CLIENT_SECRET",
-        "PAYPAL_ENVIRONMENT",
-        "NEXT_PUBLIC_PAYPAL_CLIENT_ID",
-        "NEXT_PUBLIC_PAYPAL_ENVIRONMENT",
-        "NEXT_PUBLIC_RECAPTCHA_SITE_KEY",
-        "RECAPTCHA_SECRET_KEY",
-        "GITHUB_CLIENT_ID",
-        "GITHUB_CLIENT_SECRET",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_WEBHOOK_SECRET",
-        "CLAUDE_RENTAL_TELEGRAM_USERNAME"
-      ]
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "dev": {
       "cache": false,

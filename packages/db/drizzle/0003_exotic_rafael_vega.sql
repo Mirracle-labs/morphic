@@ -1,1 +1,0 @@
-ALTER TABLE "payments" ADD COLUMN "captured_at" timestamp with time zone;

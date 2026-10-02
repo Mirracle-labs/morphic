@@ -190,32 +190,11 @@ check('ghost status released', ghost!.status === 'released');
 
 // ledger sum == balance cache (source of truth consistency, balance-sourced entries)
 const [sum] = await db
-  .select({ total: sql<number>`coalesce(sum(${s.creditLedger.amount}),0)::bigint` })
+  .select({ total: sql<number>`coalesce(sum(${s.creditLedger.amount}),0)::int` })
   .from(s.creditLedger)
   .where(sql`${s.creditLedger.userId} = ${user!.id} and ${s.creditLedger.sourceType} = 'balance'`);
 check('ledger sum == balance', Number(sum!.total) === b5, `ledger ${sum!.total} vs balance ${b5}`);
 
-// Phase D — Observability Alert health check test (§5.7)
-const { checkProviderHealth, getProviderHealth } = await import('../../../apps/api/src/lib/alert.ts');
-const testProviderName = `e2e_prov_${runId}`;
-await db.insert(s.requestLogs).values([
-  { requestId: `req_e2e_1_${runId}`, modelAlias: 'test', providerName: testProviderName, status: 'error', errorType: '500' },
-  { requestId: `req_e2e_2_${runId}`, modelAlias: 'test', providerName: testProviderName, status: 'error', errorType: '500' },
-  { requestId: `req_e2e_3_${runId}`, modelAlias: 'test', providerName: testProviderName, status: 'error', errorType: '500' },
-  { requestId: `req_e2e_4_${runId}`, modelAlias: 'test', providerName: testProviderName, status: 'success' },
-]);
-
-const healthList = await getProviderHealth({ lookbackMinutes: 5, minRequests: 3, errorRateThreshold: 0.5 });
-const provHealth = healthList.find((h: { providerName: string }) => h.providerName === testProviderName);
-check('provider health detected high error rate', Boolean(provHealth) && provHealth!.errorRate === 0.75, `errorRate ${provHealth?.errorRate}`);
-check('provider status alerting', provHealth?.status === 'alerting');
-
-const alertCheckResult = await checkProviderHealth({ minRequests: 3, errorRateThreshold: 0.5 });
-const provAlerting = alertCheckResult.find((h: { providerName: string }) => h.providerName === testProviderName);
-check('alert triggered for provider', Boolean(provAlerting?.lastAlertAt));
-
-
 upstream.close();
 console.log(results.join('\n'));
 process.exit(process.exitCode ?? 0);
-
