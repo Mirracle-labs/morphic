@@ -1,41 +1,52 @@
+export const dynamic = 'force-dynamic';
+
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import Navbar from '@/components/Navbar';
 import HeroOpening from '@/components/HeroOpening';
-import ModelCatalog from '@/components/ModelCatalog';
 import HowItWorksSteps from '@/components/HowItWorksSteps';
-import MarketingProblemSolution from '@/components/MarketingProblemSolution';
-import QuickstartSnippet from '@/components/QuickstartSnippet';
+import FeatureShowcase from '@/components/FeatureShowcase';
+import MagicTerminal from '@/components/MagicTerminal';
+import PricingPlans from '@/components/PricingPlans';
+import LandingApiCta from '@/components/LandingApiCta';
 import MarketingFaq from '@/components/MarketingFaq';
 import Footer from '@/components/Footer';
 
 export default async function Home() {
-  const session = await auth.api.getSession({ headers: await headers() });
+  let session = null;
+  try {
+    session = await auth.api.getSession({ headers: await headers() });
+  } catch (err) {
+    console.warn('[Home] Session check failed, rendering as guest:', err);
+  }
 
   return (
-    <main className="min-h-screen bg-[#fafafa] text-neutral-900 selection:bg-neutral-900 selection:text-white relative flex flex-col justify-between overflow-x-hidden">
-      {/* Floating Capsule Navbar */}
+    <main className="min-h-screen bg-[#fafafa] text-neutral-900 selection:bg-neutral-900 selection:text-white relative flex flex-col justify-between overflow-x-clip">
+      {/* 1. Capsule Floating Navbar */}
       <Navbar session={session} />
 
-      {/* 1. Opening Section: Hero */}
+      {/* 2. Focused Hero Section */}
       <HeroOpening isLoggedIn={!!session} />
 
-      {/* 2. Model Catalog & AI Capabilities (Without public pricing card layout) */}
-      <ModelCatalog isLoggedIn={!!session} />
-
-      {/* 3. Step-by-Step Guide */}
+      {/* 3. 4 Langkah Mudah Menggunakan API Key AI (Integrasi IDE) */}
       <HowItWorksSteps isLoggedIn={!!session} />
 
-      {/* 4. Marketing Comparison: Old Problems vs Morphic Solution */}
-      <MarketingProblemSolution />
+      {/* 3.5 Asymmetric Image Showcase — visual breathing room */}
+      <FeatureShowcase />
 
-      {/* 5. Developer Integration: Quickstart Code Snippets */}
-      <QuickstartSnippet />
+      {/* 4. Interactive Multi-IDE Terminal (Separate Section) */}
+      <MagicTerminal />
 
-      {/* 6. Marketing FAQ */}
+      {/* 5.5 Transparent Pricing & Token Packs */}
+      <PricingPlans isLoggedIn={!!session} />
+
+      {/* 6. Editorial FAQ with Sticky Header */}
       <MarketingFaq />
 
-      {/* 7. Bottom Minimal Footer */}
+      {/* 7. High-Impact Dark Contrast CTA Area */}
+      <LandingApiCta isLoggedIn={!!session} />
+
+      {/* 8. Footer with Submerged Wireframe Morphic Horizon */}
       <Footer />
     </main>
   );

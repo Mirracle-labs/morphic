@@ -10,6 +10,7 @@ build/
 *.tsbuildinfo
 apps/web/.next/
 apps/api/dist/
+apps/api/api/
 
 # Caches
 .turbo/
@@ -32,6 +33,11 @@ pgdata/
 *.sqlite
 *.db
 
+# Data dump / export SQL files — may contain sensitive user data
+data_*.sql
+*_export*.sql
+*_dump*.sql
+
 # Logs
 *.log
 logs/
@@ -44,3 +50,17 @@ Thumbs.db
 
 # Docker volumes (local)
 docker-data/
+
+# Markdown Farros
+PRD-n-SPEC.md
+inspection_and_planning.md
+docs-ros/
+.agents
+.to-do
+.vercel
+
+# CodeGraph index (local tooling)
+.codegraph/
+# Next.js auto-generated agent rule files
+apps/web/CLAUDE.md
+apps/web/AGENTS.md

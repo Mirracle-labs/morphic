@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
 export const KEY_PREFIX = 'mp-';
 
@@ -24,3 +24,43 @@ export function displayPrefix(raw: string): string {
 export function maskedKey(prefix: string): string {
   return `${prefix}${'•'.repeat(9)}`;
 }
+
+const ALGO = 'aes-256-gcm';
+
+function getEncryptionKey(): Buffer {
+  const secret =
+    process.env.KEY_ENCRYPTION_SECRET ||
+    process.env.BETTER_AUTH_SECRET ||
+    process.env.PROVIDER_ENC_KEY ||
+    'morphic-secret-salt-default-key-32b';
+  return createHash('sha256').update(secret).digest();
+}
+
+export function encryptApiKey(plaintext: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(ALGO, getEncryptionKey(), iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv.toString('base64url'), tag.toString('base64url'), enc.toString('base64url')].join('.');
+}
+
+export function decryptApiKey(payload: string | null | undefined): string | null {
+  if (!payload) return null;
+  try {
+    const [ivB, tagB, dataB] = payload.split('.');
+    if (!ivB || !tagB || !dataB) return null;
+    const decipher = createDecipheriv(
+      ALGO,
+      getEncryptionKey(),
+      Buffer.from(ivB, 'base64url')
+    );
+    decipher.setAuthTag(Buffer.from(tagB, 'base64url'));
+    return Buffer.concat([
+      decipher.update(Buffer.from(dataB, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+

@@ -10,6 +10,7 @@
     "db:generate": "pnpm --filter @morphic/db generate",
     "db:migrate": "pnpm --filter @morphic/db migrate",
     "db:seed": "pnpm --filter @morphic/db seed",
+    "db:seed:dahl": "pnpm --filter @morphic/api seed:dahl",
     "db:studio": "pnpm --filter @morphic/db studio",
     "db:e2e": "pnpm --filter @morphic/db e2e"
   },

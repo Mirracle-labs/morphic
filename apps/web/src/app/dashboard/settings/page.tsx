@@ -1,22 +1,29 @@
-import { requireUser } from '@/lib/actions';
+import { eq } from 'drizzle-orm';
+import { db, schema as s } from '@morphic/db';
+import { listActiveSessions, requireUser } from '@/lib/actions';
+import { SettingsView } from './settings-view';
 
 export default async function SettingsPage() {
-  const user = await requireUser();
+  const [user, sessions] = await Promise.all([requireUser(), listActiveSessions()]);
+
+  // The session user carries no role, and the profile card used to print a fixed
+  // "DEVELOPER" badge. Read what the account actually is.
+  let account: { role: string; emailVerified: boolean } | null = null;
+  try {
+    const [row] = await db
+      .select({ role: s.users.role, emailVerified: s.users.emailVerified })
+      .from(s.users)
+      .where(eq(s.users.id, user.id))
+      .limit(1);
+    if (row) account = { role: row.role, emailVerified: Boolean(row.emailVerified) };
+  } catch (err) {
+    console.warn('[SettingsPage] Could not read account role:', err);
+  }
+
   return (
-    <div className="flex flex-col gap-6 max-w-xl">
-      <h1 className="text-2xl font-bold">Settings</h1>
-      <div className="card flex flex-col gap-2">
-        <div className="text-sm text-[var(--muted)]">Account</div>
-        <div>{user.name}</div>
-        <div className="text-sm text-[var(--muted)]">{user.email}</div>
-      </div>
-      <div className="card">
-        <div className="text-sm text-[var(--muted)] mb-2">API Endpoint</div>
-        <code className="font-mono text-sm">https://api.morphic.xxx/v1</code>
-        <div className="text-xs text-[var(--muted)] mt-2">
-          Configure your AI coding agent with this base URL and an mp- API key.
-        </div>
-      </div>
-    </div>
+    <SettingsView
+      user={{ ...user, role: account?.role ?? null, emailVerified: account?.emailVerified ?? null }}
+      sessions={sessions}
+    />
   );
 }

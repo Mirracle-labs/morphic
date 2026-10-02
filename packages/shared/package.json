@@ -8,6 +8,7 @@
     "./keys": "./src/keys.ts",
     "./credits": "./src/credits.ts",
     "./types": "./src/types.ts",
+    "./models": "./src/models.ts",
     "./provider-crypto": "./src/provider-crypto.ts"
   },
   "scripts": {

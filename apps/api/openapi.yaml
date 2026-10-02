@@ -1,0 +1,273 @@
+openapi: 3.0.3
+info:
+  title: Morphic AI Gateway API
+  description: >
+    API Gateway for proxying requests to AI models with unified billing,
+    rate limiting, and API key management. Fully compatible with OpenAI specs.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8787
+    description: Local development server
+  - url: https://api.morphic.example.com
+    description: Production server
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      description: API Key authentication. Use keys starting with `mp-`.
+    SessionAuth:
+      type: http
+      scheme: bearer
+      description: Session Token authentication for account management endpoints.
+  
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+            code:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: Create Chat Completion
+      description: Creates a model response for the given chat conversation.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - model
+                - messages
+              properties:
+                model:
+                  type: string
+                  example: "MiniMaxAI/MiniMax-M2.7"
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        example: "user"
+                      content:
+                        type: string
+                        example: "Hello!"
+                stream:
+                  type: boolean
+                  default: false
+                max_tokens:
+                  type: integer
+      responses:
+        "200":
+          description: Successful completion response (OpenAI compatible)
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/models:
+    get:
+      summary: List Models
+      description: Lists the currently available active and deprecated models.
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: A list of model objects.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: "list"
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        object:
+                          type: string
+                          example: "model"
+                        owned_by:
+                          type: string
+                          example: "morphic"
+                        display_name:
+                          type: string
+                        status:
+                          type: string
+                        replacement_model_alias:
+                          type: string
+                          nullable: true
+
+  /v1/keys:
+    post:
+      summary: Create API Key
+      description: Generate a new API key for inference.
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: Name for the key
+                expiresIn:
+                  type: string
+                  description: "30d, 90d, none, or ISO timestamp"
+                  default: "none"
+      responses:
+        "201":
+          description: Returns the full key (this is the only time the full key is shown).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  prefix:
+                    type: string
+                  key:
+                    type: string
+                    description: The raw key (mp-...)
+                  status:
+                    type: string
+                  expires_at:
+                    type: string
+                    nullable: true
+                  created_at:
+                    type: string
+
+    get:
+      summary: List API Keys
+      security:
+        - SessionAuth: []
+      responses:
+        "200":
+          description: A list of the user's API keys (without the raw key).
+
+  /v1/keys/{id}:
+    delete:
+      summary: Revoke API Key
+      security:
+        - SessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key successfully revoked.
+
+  /v1/account/balance:
+    get:
+      summary: Get Balance
+      security:
+        - SessionAuth: []
+      responses:
+        "200":
+          description: Current user credit balance.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credits:
+                    type: integer
+                  updated_at:
+                    type: string
+                    format: date-time
+
+  /v1/account/usage:
+    get:
+      summary: Get Usage History
+      security:
+        - SessionAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated usage history.
+
+  /v1/account/transactions:
+    get:
+      summary: Get Transaction Ledger
+      security:
+        - SessionAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated ledger.
+
+  /health:
+    get:
+      summary: Health Check
+      description: Check if API is running.
+      responses:
+        "200":
+          description: API is healthy.
