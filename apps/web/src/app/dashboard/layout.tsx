@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { getSessionWithRetry, isCurrentUserAdmin } from '@/lib/actions';
 import { getBalance } from '@morphic/db/billing';
 import { DashboardShell } from '@/components/DashboardShell';
+import { loadNotifications } from '@/lib/notifications';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await getSessionWithRetry();
@@ -17,16 +18,20 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // paid on every single navigation. It read the same balances row this does.
   // Balance and admin role are read in parallel; the role comes from the DB (users.role),
   // never from the session cookie, and a failed read simply hides the admin link.
-  const [balance, isAdmin] = await Promise.all([
+  const [balance, isAdmin, notifications] = await Promise.all([
     getBalance(session.user.id).catch((err) => {
       console.warn('[DashboardLayout] Balance read failed:', err);
       return 0;
     }),
     isCurrentUserAdmin().catch(() => false),
+    loadNotifications(session.user.id).catch((err) => {
+      console.warn('[DashboardLayout] Notifications read failed:', err);
+      return null;
+    }),
   ]);
 
   return (
-    <DashboardShell session={session} balance={balance} isAdmin={isAdmin}>
+    <DashboardShell session={session} balance={balance} isAdmin={isAdmin} notifications={notifications}>
       {children}
     </DashboardShell>
   );

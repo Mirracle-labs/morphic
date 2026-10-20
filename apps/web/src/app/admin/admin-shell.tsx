@@ -22,6 +22,7 @@ import {
   KeyRound,
   TrendingUp,
   AlertTriangle,
+  Megaphone,
 } from 'lucide-react';
 
 interface AdminShellProps {
@@ -52,6 +53,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
     { href: '/admin/alerts', label: t.admin.nav.alerts, icon: AlertTriangle },
     { href: '/admin/codes', label: t.admin.nav.codes, icon: Ticket },
     { href: '/admin/leaderboard', label: t.admin.nav.leaderboard, icon: Trophy },
+    { href: '/admin/announcements', label: t.admin.nav.announcements, icon: Megaphone },
     { href: '/admin/audit', label: t.admin.nav.audit, icon: History },
   ];
 

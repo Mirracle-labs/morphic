@@ -444,6 +444,42 @@ export const redemptions = pgTable(
   (t) => [uniqueIndex('redemptions_unique').on(t.codeId, t.userId)],
 );
 
+// A paid payment with a gift card row mints a single-use redeem code instead of crediting
+// the buyer (see processPaymentSuccess).
+export const giftCards = pgTable(
+  'gift_cards',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    paymentId: uuid('payment_id')
+      .notNull()
+      .unique()
+      .references(() => payments.id, { onDelete: 'cascade' }),
+    purchaserId: uuid('purchaser_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    design: text('design').notNull(),
+    recipientEmail: text('recipient_email'),
+    redeemCodeId: uuid('redeem_code_id').references(() => redeemCodes.id, { onDelete: 'set null' }),
+    createdAt: now(),
+  },
+  (t) => [index('gift_cards_purchaser_idx').on(t.purchaserId)],
+);
+
+// ── Announcements (changelog shown in the dashboard notification drawer) ──
+
+export const announcements = pgTable(
+  'announcements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    linkUrl: text('link_url'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('announcements_published_idx').on(t.publishedAt)],
+);
+
 // ── Admin audit ───────────────────────────────────────
 
 export const adminAuditLog = pgTable(

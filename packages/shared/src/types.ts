@@ -64,3 +64,12 @@ export const ledgerEntryType = [
   'promotion',
 ] as const;
 export type LedgerEntryType = (typeof ledgerEntryType)[number];
+
+/** Gift card artwork ids. The web maps each to its styling; the API only accepts these. */
+export const GIFT_CARD_DESIGNS = ['ember', 'dusk', 'aurora', 'orchid', 'flare', 'noir'] as const;
+export type GiftCardDesign = (typeof GIFT_CARD_DESIGNS)[number];
+
+export const giftCardInputSchema = z.object({
+  design: z.enum(GIFT_CARD_DESIGNS),
+  recipientEmail: z.string().trim().toLowerCase().email().max(254).nullish(),
+});

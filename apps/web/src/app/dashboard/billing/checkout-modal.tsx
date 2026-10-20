@@ -140,11 +140,13 @@ interface CheckoutModalProps {
     provider: string;
     status: string;
   } | null;
+  /** Set when buying a gift card: the payment mints a code instead of crediting this account. */
+  giftCard?: { design: string; recipientEmail: string | null } | null;
   onClose: () => void;
   onSuccess: (creditsAdded: number) => void;
 }
 
-export function CheckoutModal({ pkg, existingPayment, onClose, onSuccess }: CheckoutModalProps) {
+export function CheckoutModal({ pkg, existingPayment, giftCard, onClose, onSuccess }: CheckoutModalProps) {
   const { t, locale } = useTranslation();
   const [status, setStatus] = useState<PaymentStatus>('idle');
   const [paymentId, setPaymentId] = useState<string | null>(existingPayment?.id ?? null);
@@ -196,6 +198,7 @@ export function CheckoutModal({ pkg, existingPayment, onClose, onSuccess }: Chec
   }, [expiresAt]);
 
   const fetchPostPaymentToken = useCallback(() => {
+    if (giftCard) return; // the buyer's balance did not change, so no funded key to hand out
     setIsProvisioningToken(true);
     provisionPostPaymentKey({ packageName: pkg.name })
       .then((res) => {
@@ -212,7 +215,7 @@ export function CheckoutModal({ pkg, existingPayment, onClose, onSuccess }: Chec
       .finally(() => {
         setIsProvisioningToken(false);
       });
-  }, [pkg.name]);
+  }, [pkg.name, giftCard]);
 
   const copyText = (text: string, type: 'key' | 'base' | 'snippet') => {
     navigator.clipboard.writeText(text);
@@ -374,6 +377,7 @@ export function CheckoutModal({ pkg, existingPayment, onClose, onSuccess }: Chec
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           packageId: pkg.id,
+          giftCard: giftCard ?? undefined,
         }),
       });
 
@@ -593,6 +597,7 @@ export function CheckoutModal({ pkg, existingPayment, onClose, onSuccess }: Chec
             <div className="space-y-3 pt-1">
               <PayPalButton
                 packageId={pkg.id}
+                giftCard={giftCard}
                 paymentId={paymentId ?? existingPayment?.id}
                 onPaymentCreated={(pid) => setPaymentId(pid)}
                 onSuccess={handlePayPalSuccess}

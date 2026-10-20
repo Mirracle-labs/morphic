@@ -593,3 +593,27 @@ export async function releaseStuckReservations() {
   invalidate('admin:alerts');
   revalidatePath('/admin/alerts');
 }
+
+/** Changelog entry for the dashboard notification drawer. Links must be site paths or http(s). */
+export async function createAnnouncement(formData: FormData) {
+  const admin = await requireAdmin();
+  const title = String(formData.get('title') ?? '').trim().slice(0, 200);
+  const body = String(formData.get('body') ?? '').trim().slice(0, 4000);
+  const rawLink = String(formData.get('linkUrl') ?? '').trim();
+  if (!title || !body) return;
+  const linkUrl = /^\/(?!\/)/.test(rawLink) || /^https?:\/\//.test(rawLink) ? rawLink.slice(0, 500) : null;
+  const [row] = await db.insert(s.announcements).values({ title, body, linkUrl, createdBy: admin.id }).returning({ id: s.announcements.id });
+  await audit(admin.id, 'create_announcement', 'announcement', row!.id, { title });
+  revalidatePath('/admin/announcements');
+  revalidatePath('/dashboard', 'layout');
+}
+
+export async function deleteAnnouncement(formData: FormData) {
+  const admin = await requireAdmin();
+  const id = String(formData.get('id') ?? '');
+  if (!id) return;
+  await db.delete(s.announcements).where(eq(s.announcements.id, id));
+  await audit(admin.id, 'delete_announcement', 'announcement', id);
+  revalidatePath('/admin/announcements');
+  revalidatePath('/dashboard', 'layout');
+}

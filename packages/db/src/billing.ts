@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { and, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import { db, withTransaction } from './index.ts';
 import * as s from './schema.ts';
@@ -7,6 +8,15 @@ import {
   type ModelPricing,
 } from '@morphic/shared/credits';
 import type { LedgerEntryType } from '@morphic/shared/types';
+
+// Unambiguous alphabet (no 0/O/1/I), same as admin-generated redeem codes.
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function randomCodeSuffix(len: number): string {
+  let out = '';
+  for (let i = 0; i < len; i++) out += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  return out;
+}
 
 export class InsufficientCreditsError extends Error {
   constructor(message: string) {
@@ -458,6 +468,27 @@ export async function processPaymentSuccess(
         return { success: true, credits: existing.credits, alreadyPaid: true };
       }
       return { success: false, credits: 0 };
+    }
+
+    // Step 2b: Gift card purchase — mint a single-use credits code instead of crediting the buyer
+    const [gift] = await tx
+      .select({ id: s.giftCards.id })
+      .from(s.giftCards)
+      .where(eq(s.giftCards.paymentId, locked.id))
+      .limit(1);
+    if (gift) {
+      const [code] = await tx
+        .insert(s.redeemCodes)
+        .values({
+          code: `MP-GIFT-${randomCodeSuffix(12)}`,
+          name: `Gift card (payment ${locked.id})`,
+          rewardType: 'credits',
+          creditAmount: locked.credits,
+          maxRedemptions: 1,
+        })
+        .returning({ id: s.redeemCodes.id });
+      await tx.update(s.giftCards).set({ redeemCodeId: code!.id }).where(eq(s.giftCards.id, gift.id));
+      return { success: true, credits: locked.credits };
     }
 
     // Step 3: Verify package exists if payment is tied to a packageId

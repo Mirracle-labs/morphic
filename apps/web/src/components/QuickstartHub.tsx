@@ -81,7 +81,7 @@ res = client.chat.completions.create(
 )`;
 
   return (
-    <div className="rounded-3xl border border-neutral-200/90 bg-white shadow-xs overflow-hidden h-full flex flex-col">
+    <div className="rounded-2xl border border-neutral-200 bg-white overflow-hidden h-full flex flex-col">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-6 pt-6 pb-4">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-neutral-500" />

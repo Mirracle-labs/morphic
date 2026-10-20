@@ -5,6 +5,8 @@ import { processPaymentSuccess } from '@morphic/db/billing';
 import { rateLimitStore } from '../ratelimit';
 
 const LOW_BALANCE_CREDITS = Number(process.env.LOW_BALANCE_CREDITS ?? 100_000);
+const escapeHtml = (v: string) =>
+  v.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
 const appUrl = () => process.env.NEXT_PUBLIC_APP_URL || 'https://morphic-api.web.id';
 
 async function activeUserEmail(userId: string): Promise<string | null> {
@@ -56,6 +58,33 @@ export async function notifyPaymentPaid(paymentId: string): Promise<void> {
     if (!to) return;
     const amount = p.currency === 'USD' ? `$${(p.amountCents / 100).toFixed(2)}` : `Rp ${p.amountCents.toLocaleString('id-ID')}`;
     const url = `${appUrl()}/receipt/${paymentId}`;
+
+    const [gift] = await db
+      .select({ recipientEmail: s.giftCards.recipientEmail, code: s.redeemCodes.code })
+      .from(s.giftCards)
+      .innerJoin(s.redeemCodes, eq(s.redeemCodes.id, s.giftCards.redeemCodeId))
+      .where(eq(s.giftCards.paymentId, paymentId))
+      .limit(1);
+    if (gift) {
+      const credits = p.credits.toLocaleString('id-ID');
+      const redeemUrl = `${appUrl()}/dashboard/redeem`;
+      await sendEmail({
+        to,
+        subject: `Gift card Morphic siap: ${amount}`,
+        text: `Pembelian gift card ${amount} berhasil. Kode (${credits} kredit, sekali pakai): ${gift.code}\n\nKuitansi: ${url}`,
+        html: `<p>Pembelian gift card <b>${amount}</b> berhasil.</p><p>Kode (${credits} kredit, sekali pakai): <b>${gift.code}</b></p><p><a href="${url}">Lihat kuitansi</a></p>`,
+      });
+      if (gift.recipientEmail) {
+        await sendEmail({
+          to: gift.recipientEmail,
+          subject: 'Kamu dapat gift card Morphic',
+          text: `${to} mengirim gift card Morphic senilai ${credits} kredit.\n\nKode: ${gift.code}\nTukarkan di ${redeemUrl}`,
+          html: `<p>${escapeHtml(to)} mengirim gift card Morphic senilai <b>${credits} kredit</b>.</p><p>Kode: <b>${gift.code}</b></p><p><a href="${redeemUrl}">Tukarkan kode</a></p>`,
+        });
+      }
+      return;
+    }
+
     await sendEmail({
       to,
       subject: `Pembayaran Morphic berhasil: ${amount}`,

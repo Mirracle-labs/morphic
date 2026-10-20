@@ -11,6 +11,7 @@ import { sendEmail } from '@morphic/shared/email';
 import { auth } from '@/lib/auth';
 import { fetchBackendApi } from './api-client';
 import { softDeleteUser } from './account-deletion';
+import { loadNotifications } from './notifications';
 
 import { cache } from 'react';
 
@@ -699,4 +700,10 @@ export async function deleteOwnAccount(formData: FormData) {
     console.error('[deleteOwnAccount] Failed to delete account:', err);
     return { ok: false, error: 'Gagal menghapus akun. Silakan coba lagi nanti.' };
   }
+}
+
+/** Fresh notification list for the drawer, so it is current without reloading the dashboard. */
+export async function getNotificationsAction() {
+  const user = await requireUser();
+  return loadNotifications(user.id);
 }

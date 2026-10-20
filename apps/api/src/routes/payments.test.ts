@@ -591,3 +591,59 @@ test('Security Test 10: /paypal/capture rejects payment on amount or currency mi
   assert.equal(balance, 0);
 });
 
+
+test('Gift card: paid gift mints a single-use code instead of crediting the buyer; refund freezes it', async () => {
+  const { processPaymentSuccess } = await import('@morphic/db/billing');
+  const { transitionPayment } = await import('../lib/payment-state');
+  const runId = Date.now();
+
+  const [user] = await db
+    .insert(s.users)
+    .values({ name: 'Gift Buyer', email: `gift-${runId}@test.dev` })
+    .returning();
+  const token = `test_gift_session_${runId}`;
+  await db.insert(s.sessions).values({ userId: user.id, token, expiresAt: new Date(Date.now() + 3600_000) });
+
+  // Unknown design is rejected before any payment row exists
+  const bad = await app.request('/v1/payments/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ packageId: '00000000-0000-0000-0000-000000000000', giftCard: { design: 'nope' } }),
+  });
+  assert.equal(bad.status, 400);
+  assert.equal(((await bad.json()) as any).error.code, 'invalid_gift_card');
+
+  const [payment] = await db
+    .insert(s.payments)
+    .values({
+      userId: user.id,
+      provider: 'duitku',
+      externalId: `morphic-gift-${runId}`,
+      amountCents: 50000,
+      currency: 'IDR',
+      credits: 25000,
+      status: 'pending',
+    })
+    .returning();
+  await db.insert(s.giftCards).values({ paymentId: payment.id, purchaserId: user.id, design: 'ember' });
+
+  const res = await processPaymentSuccess(payment.id);
+  assert.equal(res.success, true);
+  assert.equal(await getBalance(user.id), 0, 'buyer balance must not change');
+
+  const [gift] = await db.select().from(s.giftCards).where(eq(s.giftCards.paymentId, payment.id));
+  const [code] = await db.select().from(s.redeemCodes).where(eq(s.redeemCodes.id, gift!.redeemCodeId!));
+  assert.match(code!.code, /^MP-GIFT-[A-Z2-9]{12}$/);
+  assert.equal(code!.creditAmount, 25000);
+  assert.equal(code!.maxRedemptions, 1);
+  assert.equal(code!.active, true);
+
+  // Replay is idempotent: no second code
+  assert.equal((await processPaymentSuccess(payment.id)).alreadyPaid, true);
+  const codes = await db.select().from(s.redeemCodes).where(eq(s.redeemCodes.name, `Gift card (payment ${payment.id})`));
+  assert.equal(codes.length, 1);
+
+  await transitionPayment(payment.id, ['paid'], 'refunded');
+  const [frozen] = await db.select().from(s.redeemCodes).where(eq(s.redeemCodes.id, code!.id));
+  assert.equal(frozen!.active, false, 'refund must freeze the gift code');
+});

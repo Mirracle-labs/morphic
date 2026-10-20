@@ -45,6 +45,7 @@ data_*.sql
 # Logs
 *.log
 logs/
+!apps/web/src/app/dashboard/logs/
 
 # OS / editors
 .DS_Store

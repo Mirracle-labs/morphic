@@ -26,6 +26,12 @@ Fetched with webfetch on 2026-09-09 from the upstream `master` branch:
 | `gemini-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/gemini-color.svg (fetched 2026-10-07) |
 | `meta-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/meta-color.svg (fetched 2026-10-07) |
 | `mistral-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/mistral-color.svg (fetched 2026-10-07) |
+| `anthropic.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/anthropic.svg (fetched 2026-10-20) |
+| `groq.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/groq.svg (fetched 2026-10-20) |
+| `openrouter.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/openrouter.svg (fetched 2026-10-20) |
+| `ollama.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/ollama.svg (fetched 2026-10-20) |
+| `alibabacloud-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/alibabacloud-color.svg (fetched 2026-10-20) |
+| `moonshot.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/moonshot.svg (fetched 2026-10-20) |
 
 License source (also fetched with webfetch):
 https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE

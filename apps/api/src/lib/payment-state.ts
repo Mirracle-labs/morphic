@@ -45,6 +45,20 @@ export async function transitionPayment(
     .where(and(eq(s.payments.id, id), inArray(s.payments.status, fromStatuses)))
     .returning();
 
+  // A gift card's code is only spendable while its payment stands: refunded/disputed/review
+  // freezes it, a dispute resolved back to paid reopens it. No-op for non-gift payments.
+  if (updated) {
+    await executor
+      .update(s.redeemCodes)
+      .set({ active: to === 'paid' })
+      .where(
+        inArray(
+          s.redeemCodes.id,
+          executor.select({ id: s.giftCards.redeemCodeId }).from(s.giftCards).where(eq(s.giftCards.paymentId, id)),
+        ),
+      );
+  }
+
   return updated ?? null;
 }
 

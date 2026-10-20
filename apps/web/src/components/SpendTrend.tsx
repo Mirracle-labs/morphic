@@ -29,7 +29,7 @@ export function SpendTrend({ days, balance, isId }: SpendTrendProps) {
   return (
     <section
       aria-labelledby="spend-trend-title"
-      className="p-5 rounded-3xl bg-white border border-neutral-200/90 shadow-xs space-y-4"
+      className="p-6 rounded-2xl bg-white border border-neutral-200 space-y-4"
     >
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
         <div>

@@ -134,7 +134,9 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
       { path: '/docs', title: locale === 'en' ? 'Documentation' : 'Dokumentasi API', sub: locale === 'en' ? 'API schemas, SDKs & guides' : 'Skema API, SDK & panduan integrasi', icon: FileText },
       { path: '/dashboard', title: 'Dashboard', sub: locale === 'en' ? 'Overview metrics & stats' : 'Metrik ringkasan & statistik', icon: LayoutDashboard },
       { path: '/dashboard/keys', title: locale === 'en' ? 'API Keys' : 'Kunci API', sub: locale === 'en' ? 'Generate & manage secret tokens' : 'Buat & kelola token rahasia', icon: KeyRound },
-      { path: '/dashboard/usage', title: locale === 'en' ? 'Usage & Logs' : 'Penggunaan & Log', sub: locale === 'en' ? 'Real-time telemetry and spend' : 'Telemetri real-time dan konsumsi saldo', icon: Terminal },
+      { path: '/dashboard/logs', title: locale === 'en' ? 'Logs' : 'Log', sub: locale === 'en' ? 'Every API request, newest first' : 'Setiap request API, terbaru di atas', icon: Terminal },
+      { path: '/dashboard/cost', title: locale === 'en' ? 'Cost' : 'Biaya', sub: locale === 'en' ? 'Credits spent by period and model' : 'Kredit terpakai per periode dan model', icon: Coins },
+      { path: '/dashboard/usage', title: locale === 'en' ? 'Usage' : 'Penggunaan', sub: locale === 'en' ? 'Request counts by model' : 'Jumlah request per model', icon: Terminal },
       { path: '/dashboard/billing', title: locale === 'en' ? 'Billing & Top-up' : 'Top-up Saldo QRIS', sub: locale === 'en' ? 'Instant QRIS payment & history' : 'Pembayaran QRIS instan & riwayat', icon: Coins },
     ];
 

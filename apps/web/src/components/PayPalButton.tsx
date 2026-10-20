@@ -8,6 +8,7 @@ const API_URL = '/api/backend';
 
 interface PayPalButtonProps {
   packageId: string;
+  giftCard?: { design: string; recipientEmail: string | null } | null;
   paymentId?: string | null;
   onPaymentCreated?: (paymentId: string) => void;
   onSuccess: (credits: number) => void;
@@ -18,6 +19,7 @@ interface PayPalButtonProps {
 
 export function PayPalButton({
   packageId,
+  giftCard,
   paymentId: initialPaymentId,
   onPaymentCreated,
   onSuccess,
@@ -77,7 +79,7 @@ export function PayPalButton({
                   method: 'POST',
                   credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ packageId }),
+                  body: JSON.stringify({ packageId, giftCard: giftCard ?? undefined }),
                 });
 
                 if (!res.ok) {

@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { db, schema as s } from '@morphic/db';
+import { db, withTransaction, schema as s } from '@morphic/db';
 import { markPaymentIfOpen } from '@morphic/db/billing';
 import { fulfilPayment } from '../lib/notify';
 import { rateLimitStore } from '../ratelimit';
 import { buildReceiptPdf } from '../lib/receipt-pdf';
 import { packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
+import { giftCardInputSchema } from '@morphic/shared/types';
 import { eq, and, inArray, sql, gt } from 'drizzle-orm';
 import { sessionAuth, denyKeyDerivedSession } from '../middleware/session-auth';
 import { createTransaction } from '../lib/duitku';
@@ -29,13 +30,41 @@ payments.use('*', denyKeyDerivedSession);
 // Allowed Duitku payment methods whitelist restricted to QRIS channels without fee discrepancies
 const ALLOWED_DUITKU_PAYMENT_METHODS = new Set(['SP', 'LQ', 'NQ']);
 
+const invalidGiftCard = {
+  error: { message: 'invalid gift card', type: 'invalid_request_error', code: 'invalid_gift_card' },
+} as const;
+
+/** Optional `giftCard` body field: absent → normal top-up, present → validated or 'invalid'. */
+function parseGiftCard(raw: unknown) {
+  if (raw === undefined || raw === null) return null;
+  const parsed = giftCardInputSchema.safeParse(raw);
+  return parsed.success ? parsed.data : ('invalid' as const);
+}
+
+type GiftCard = Exclude<ReturnType<typeof parseGiftCard>, 'invalid' | null>;
+
+/** Insert the pending payment, plus its gift card row in the same transaction when gifting. */
+async function insertPayment(values: typeof s.payments.$inferInsert, gift: GiftCard | null) {
+  if (!gift) return (await db.insert(s.payments).values(values).returning())[0]!;
+  return withTransaction(async (tx) => {
+    const [payment] = await tx.insert(s.payments).values(values).returning();
+    await tx.insert(s.giftCards).values({
+      paymentId: payment.id,
+      purchaserId: values.userId,
+      design: gift.design,
+      recipientEmail: gift.recipientEmail ?? null,
+    });
+    return payment as typeof s.payments.$inferSelect;
+  });
+}
+
 // ── POST /v1/payments/create (Duitku) ─────────────────
 // Creates a Duitku checkout invoice for a given packageId (IDR currency).
 payments.post('/create', async (c) => {
   const { userId } = c.get('userSession');
 
   // Step 1: Parse and validate JSON request payload
-  let body: { packageId?: string; paymentMethod?: string };
+  let body: { packageId?: string; paymentMethod?: string; giftCard?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -46,6 +75,8 @@ payments.post('/create', async (c) => {
   }
 
   const { packageId, paymentMethod } = body;
+  const gift = parseGiftCard(body.giftCard);
+  if (gift === 'invalid') return c.json(invalidGiftCard, 400);
   if (!packageId) {
     return c.json(
       { error: { message: 'packageId is required', type: 'invalid_request_error', code: 'missing_package_id' } },
@@ -120,6 +151,9 @@ payments.post('/create', async (c) => {
     );
   }
 
+  // Gift cards carry plain credits; a model-bound package has no credit-code equivalent.
+  if (gift && pkg.modelId) return c.json(invalidGiftCard, 400);
+
   // Step 7: Determine IDR amount (USD packages converted at IDR_PER_USD)
   const amountIDR = packagePriceIdr(pkg.priceCents, pkg.currency);
 
@@ -159,9 +193,8 @@ payments.post('/create', async (c) => {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8787';
 
   // Step 10: Insert new pending payment record into DB (never reuse old payment rows)
-  const [payment] = await db
-    .insert(s.payments)
-    .values({
+  const payment = await insertPayment(
+    {
       userId,
       provider: 'duitku',
       externalId: merchantOrderId,
@@ -170,8 +203,9 @@ payments.post('/create', async (c) => {
       currency: 'IDR',
       credits: pkg.creditAllowance ?? 0,
       status: 'pending',
-    })
-    .returning();
+    },
+    gift,
+  );
 
   // Step 11: Call Duitku createTransaction API
   let duitkuResult;
@@ -181,11 +215,11 @@ payments.post('/create', async (c) => {
       merchantOrderId,
       paymentAmount: amountIDR,
       paymentMethod: paymentMethod ?? 'SP',
-      productDetails: `Morphic Credits — ${pkg.name}`,
+      productDetails: gift ? `Morphic Gift Card — ${pkg.name}` : `Morphic Credits — ${pkg.name}`,
       email: user.email.slice(0, 50), // Trim email to max 50 chars per Duitku spec
       customerVaName,
       callbackUrl: `${apiUrl}/webhooks/duitku`,
-      returnUrl: `${appUrl}/dashboard/billing?ref=${payment.id}`,
+      returnUrl: gift ? `${appUrl}/dashboard/redeem` : `${appUrl}/dashboard/billing?ref=${payment.id}`,
       expiryPeriod: DUITKU_PAYMENT_TTL_MINUTES,
     });
   } catch (err: any) {
@@ -335,7 +369,7 @@ payments.post('/paypal/create-order', async (c) => {
   const { userId } = c.get('userSession');
 
   // Step 1: Parse and validate JSON request payload
-  let body: { packageId?: string };
+  let body: { packageId?: string; giftCard?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -346,6 +380,8 @@ payments.post('/paypal/create-order', async (c) => {
   }
 
   const { packageId } = body;
+  const gift = parseGiftCard(body.giftCard);
+  if (gift === 'invalid') return c.json(invalidGiftCard, 400);
   if (!packageId) {
     return c.json(
       { error: { message: 'packageId is required', type: 'invalid_request_error', code: 'missing_package_id' } },
@@ -405,6 +441,8 @@ payments.post('/paypal/create-order', async (c) => {
     );
   }
 
+  if (gift && pkg.modelId) return c.json(invalidGiftCard, 400);
+
   // Step 4: Determine USD cents amount (IDR packages converted at IDR_PER_USD)
   const usdAmountCents = packagePriceUsdCents(pkg.priceCents, pkg.currency);
   const paymentCurrency = 'USD' as const;
@@ -412,9 +450,8 @@ payments.post('/paypal/create-order', async (c) => {
   // Step 5: Generate idempotency key & insert new pending payment row
   const idempotencyKey = randomUUID();
 
-  const [payment] = await db
-    .insert(s.payments)
-    .values({
+  const payment = await insertPayment(
+    {
       userId,
       provider: 'paypal',
       externalId: `temp:${idempotencyKey}`,
@@ -423,8 +460,9 @@ payments.post('/paypal/create-order', async (c) => {
       currency: paymentCurrency,
       credits: pkg.creditAllowance ?? 0,
       status: 'pending',
-    })
-    .returning();
+    },
+    gift,
+  );
 
   // Step 6: Call PayPal createOrder API using the exact integer cents stored on the row
   const amountStr = paypal.centsToPaypalAmount(payment.amountCents);

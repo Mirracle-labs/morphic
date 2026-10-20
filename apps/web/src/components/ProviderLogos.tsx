@@ -75,3 +75,12 @@ export function ModelProviderLogo({ provider = '', className = 'w-4 h-4' }: { pr
   }
   return <Cpu className={`${className} text-neutral-500`} role="img" aria-label="Unknown provider" />;
 }
+
+/** Logo of an upstream gateway provider (from providerBrand), generic chip when unknown. */
+export function GatewayProviderLogo({ brand, className = 'w-4 h-4' }: { brand: { label: string; logo: string | null }; className?: string }) {
+  return brand.logo ? (
+    <Image src={brand.logo} alt="" width={24} height={24} unoptimized className={className} />
+  ) : (
+    <Cpu className={`${className} text-neutral-600`} aria-hidden="true" />
+  );
+}

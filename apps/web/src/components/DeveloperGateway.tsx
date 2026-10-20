@@ -5,10 +5,8 @@ import { useState, useMemo } from 'react';
 import {
   ArrowUpRight,
   Check,
+  ChevronRight,
   Copy,
-  Cpu,
-  KeyRound,
-  Activity,
   Terminal,
   CheckCircle2,
   AlertCircle,
@@ -118,214 +116,191 @@ export default function DeveloperGateway({
     usage.totalTokens > 0 ? Math.round((usage.promptTokens / usage.totalTokens) * 100) : 0;
   const outputPct = usage.totalTokens > 0 ? 100 - inputPct : 0;
 
+  const metricCard =
+    'p-6 rounded-2xl bg-white border border-neutral-200 flex items-center gap-4 hover:border-neutral-300 transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2';
+  const metricChevron = 'h-5 w-5 shrink-0 text-neutral-400 group-hover:text-neutral-950 transition-colors';
+
   return (
-    <div className="w-full space-y-6">
+    <div className="w-full space-y-10">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-neutral-200/70">
-        <div>
-          <h1 suppressHydrationWarning className="text-2xl md:text-3xl font-heading font-extrabold text-neutral-950 tracking-tight">
+      <div className="pb-6 border-b border-neutral-200">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <h1 suppressHydrationWarning className="text-3xl md:text-4xl font-heading font-bold text-neutral-950 tracking-tight">
             {t.dashboard.title}
           </h1>
-          <p suppressHydrationWarning className="text-xs md:text-sm text-neutral-600 mt-1 max-w-2xl leading-relaxed">
-            {t.dashboard.desc}
-          </p>
+          <GatewayStatusPopover />
         </div>
-        <GatewayStatusPopover />
+        <p suppressHydrationWarning className="text-sm text-neutral-600 mt-2 max-w-2xl leading-relaxed">
+          {t.dashboard.desc}
+        </p>
       </div>
 
-      {/* Row 1: Endpoint + Balance */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-        {/* Base URL */}
-        <div className="md:col-span-7 p-6 rounded-3xl bg-white border border-neutral-200/90 shadow-xs flex flex-col justify-between hover:border-neutral-300 transition-all">
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <span suppressHydrationWarning className="text-xs font-semibold text-neutral-500">
-                {t.dashboard.baseUrl}
-              </span>
-              <span suppressHydrationWarning className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-neutral-100 text-neutral-700 border border-neutral-200">
-                {t.dashboard.openAiCompatible}
-              </span>
-            </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-neutral-50 border border-neutral-200/80 mb-3">
-              <code className="font-mono font-bold text-xs sm:text-sm text-neutral-950 truncate select-all flex-1">
-                {BASE_URL}
-              </code>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={copyBaseUrl}
-                  className="p-2 rounded-xl bg-white border border-neutral-200 hover:bg-neutral-100 active:scale-95 text-neutral-700 hover:text-black transition-all shrink-0 shadow-xs cursor-pointer flex items-center gap-1.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
-                  title={t.dashboard.copyBaseUrl}
-                >
-                  {baseUrlCopied ? (
-                    <>
-                      <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      <span suppressHydrationWarning className="text-emerald-700 text-[11px]">{t.dashboard.copied}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3.5 w-3.5" />
-                      <span suppressHydrationWarning className="text-[11px]">{t.dashboard.copy}</span>
-                    </>
-                  )}
-                </button>
+      {/* Section: Endpoint + Balance */}
+      <section className="space-y-4">
+        <h2 suppressHydrationWarning className="text-lg font-heading font-semibold text-neutral-950">
+          {t.dashboard.navGroupGateway}
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+          {/* Base URL */}
+          <div className="md:col-span-7 p-6 sm:p-7 rounded-2xl bg-white border border-neutral-200 flex flex-col">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 suppressHydrationWarning className="text-xl font-heading font-semibold text-neutral-950">
+                    {t.dashboard.baseUrl}
+                  </h3>
+                  <span suppressHydrationWarning className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-neutral-100 text-neutral-700">
+                    {t.dashboard.openAiCompatible}
+                  </span>
+                </div>
+                <code className="mt-2 block font-mono text-sm text-neutral-700 break-all select-all">
+                  {BASE_URL}
+                </code>
               </div>
+              <button
+                type="button"
+                onClick={copyBaseUrl}
+                className="shrink-0 inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-neutral-950 hover:bg-neutral-800 active:scale-95 text-white text-sm font-semibold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
+                title={t.dashboard.copyBaseUrl}
+              >
+                {baseUrlCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span suppressHydrationWarning>{baseUrlCopied ? t.dashboard.copied : t.dashboard.copy}</span>
+              </button>
+            </div>
+            <p suppressHydrationWarning className="mt-auto pt-6 border-t border-dashed border-neutral-200 text-sm text-neutral-600 leading-relaxed">
+              {t.dashboard.baseUrlDesc}
+            </p>
+          </div>
+
+          {/* Balance + Token Capacity */}
+          <div className="md:col-span-5 p-6 sm:p-7 rounded-2xl bg-white border border-neutral-200 flex flex-col">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 suppressHydrationWarning className="text-xl font-heading font-semibold text-neutral-950">
+                  {t.dashboard.creditBalance}
+                </h3>
+                {balanceUpdatedAtState && (
+                  <p className="mt-1 text-sm text-neutral-500">
+                    <span suppressHydrationWarning>{t.dashboard.lastUpdated}</span>
+                    {new Date(balanceUpdatedAtState).toLocaleDateString(isId ? 'id-ID' : 'en-US', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      timeZone: 'Asia/Jakarta',
+                    })}
+                  </p>
+                )}
+              </div>
+              <Link
+                href="/dashboard/billing"
+                className="shrink-0 inline-flex items-center h-10 px-4 rounded-lg bg-neutral-950 hover:bg-neutral-800 active:scale-95 text-white text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
+              >
+                <span suppressHydrationWarning>{t.dashboard.topUp}</span>
+              </Link>
+            </div>
+            <div className="mt-auto pt-6">
+              <div suppressHydrationWarning className="text-3xl font-mono font-bold text-neutral-950 tabular-nums">
+                Rp {balance.toLocaleString(locale === 'id' ? 'id-ID' : 'en-US')}
+              </div>
+              {balance > 0 && avgCreditsPer1m > 0 ? (
+                <div className="mt-1 font-mono text-sm font-semibold text-emerald-700">
+                  ≈ {formatTokenEstimate(estimatedTokens)} {t.dashboard.tokenCapacityUnit}
+                </div>
+              ) : (
+                <p suppressHydrationWarning className="mt-1 text-sm text-neutral-500 leading-relaxed">
+                  {t.dashboard.zeroBalance}
+                </p>
+              )}
             </div>
           </div>
-          <p suppressHydrationWarning className="text-xs text-neutral-500 leading-relaxed">
-            {t.dashboard.baseUrlDesc}
-          </p>
         </div>
+      </section>
 
-        {/* Balance + Token Capacity */}
-        <div className="md:col-span-5 p-6 rounded-3xl bg-neutral-950 text-white border border-neutral-800 shadow-md flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span suppressHydrationWarning className="text-xs font-mono font-semibold tracking-wider uppercase text-neutral-400">
-                {t.dashboard.creditBalance}
-              </span>
-            </div>
-            <div suppressHydrationWarning className="text-2xl sm:text-3xl font-heading font-black text-white mb-1 font-mono tabular-nums">
-              Rp {balance.toLocaleString(locale === 'id' ? 'id-ID' : 'en-US')}
-            </div>
-            {balanceUpdatedAtState && (
-              <p className="text-[11px] text-neutral-400 font-mono mb-2">
-                <span suppressHydrationWarning>{t.dashboard.lastUpdated}</span>
-                {new Date(balanceUpdatedAtState).toLocaleDateString(isId ? 'id-ID' : 'en-US', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  timeZone: 'Asia/Jakarta',
-                })}
-              </p>
-            )}
-            {balance > 0 && avgCreditsPer1m > 0 ? (
-              <div className="font-mono text-sm font-bold text-emerald-400">
-                ≈ {formatTokenEstimate(estimatedTokens)} {t.dashboard.tokenCapacityUnit}
-              </div>
-            ) : (
-              <p suppressHydrationWarning className="text-xs text-neutral-400 leading-relaxed">
-                {t.dashboard.zeroBalance}
-              </p>
-            )}
-          </div>
-          <Link
-            href="/dashboard/billing"
-            className="mt-4 w-full py-2.5 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 active:scale-[0.98] text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all text-center cursor-pointer"
-          >
-            <span suppressHydrationWarning>{t.dashboard.topUp}</span>
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </Link>
-        </div>
-      </div>
-
-      {/* Row 2: Metric Pulse Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-        {/* API Keys */}
-        <Link
-          href="/dashboard/keys"
-          className="md:col-span-4 p-5 rounded-3xl bg-white border border-neutral-200/90 shadow-xs flex flex-col justify-between hover:border-neutral-300 hover:shadow-sm transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950 group-hover:text-black truncate font-mono tabular-nums">
-                {activeKeys} {t.dashboard.keysActiveCount}
-              </div>
-              <span suppressHydrationWarning className="text-xs text-neutral-500">
+      {/* Section: Metrics + spend trend */}
+      <section className="space-y-4">
+        <h2 suppressHydrationWarning className="text-lg font-heading font-semibold text-neutral-950">
+          {t.dashboard.navUsage}
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* API Keys */}
+          <Link href="/dashboard/keys" className={metricCard}>
+            <div className="min-w-0 flex-1">
+              <span suppressHydrationWarning className="text-sm text-neutral-600">
                 {t.dashboard.activeKeys}
               </span>
-            </div>
-            <KeyRound className="h-4 w-4 text-neutral-400 group-hover:text-neutral-950 transition-colors shrink-0 mt-0.5" />
-          </div>
-          <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-[11px] font-medium text-neutral-500 group-hover:text-neutral-950 transition-colors">
-            <span>{t.dashboard.manageKeys}</span>
-            <ArrowUpRight className="h-3.5 w-3.5 text-neutral-400 group-hover:text-neutral-950 transition-colors" />
-          </div>
-        </Link>
-
-        {/* Tokens Used */}
-        <Link
-          href="/dashboard/usage"
-          className="md:col-span-4 p-5 rounded-3xl bg-white border border-neutral-200/90 shadow-xs flex flex-col justify-between hover:border-neutral-300 hover:shadow-sm transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="font-heading font-bold text-lg text-neutral-950 group-hover:text-black font-mono tracking-tight truncate tabular-nums">
-                {formatTokenEstimate(usage.totalTokens)} Token
+              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+                {activeKeys} <span className="text-base font-sans font-medium text-neutral-500">{t.dashboard.keysActiveCount}</span>
               </div>
-              <span suppressHydrationWarning className="text-xs text-neutral-500">
+              <span suppressHydrationWarning className="mt-1 block text-xs text-neutral-500">{t.dashboard.manageKeys}</span>
+            </div>
+            <ChevronRight className={metricChevron} />
+          </Link>
+
+          {/* Tokens Used */}
+          <Link href="/dashboard/usage" className={metricCard}>
+            <div className="min-w-0 flex-1">
+              <span suppressHydrationWarning className="text-sm text-neutral-600">
                 {usage.totalTokens > 0 ? t.dashboard.tokensUsedUnit : t.dashboard.noUsageYet}
               </span>
-            </div>
-            <Activity className="h-4 w-4 text-neutral-400 group-hover:text-neutral-950 transition-colors shrink-0 mt-0.5" />
-          </div>
-          {usage.totalTokens > 0 ? (
-            <div className="mt-3">
-              <div className="flex h-1.5 rounded-full bg-neutral-100 overflow-hidden mb-1.5">
-                <div className="bg-neutral-950 transition-all" style={{ width: `${inputPct}%` }} />
-                <div className="bg-neutral-300 transition-all" style={{ width: `${outputPct}%` }} />
+              <div className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+                {formatTokenEstimate(usage.totalTokens)} <span className="text-base font-sans font-medium text-neutral-500">Token</span>
               </div>
-              <div className="flex items-center justify-between text-[10px] font-mono text-neutral-500 font-medium">
-                <span>{t.dashboard.inputOutputLabel} {inputPct}% / {outputPct}%</span>
-              </div>
+              {usage.totalTokens > 0 ? (
+                <div className="mt-3">
+                  <div className="flex h-2 rounded-full bg-neutral-100 overflow-hidden">
+                    <div className="bg-neutral-950" style={{ width: `${inputPct}%` }} />
+                    <div className="bg-neutral-300" style={{ width: `${outputPct}%` }} />
+                  </div>
+                  <span className="mt-1.5 block text-xs font-mono text-neutral-500">
+                    {t.dashboard.inputOutputLabel} {inputPct}% / {outputPct}%
+                  </span>
+                </div>
+              ) : (
+                <span suppressHydrationWarning className="mt-1 block text-xs text-neutral-500">{t.dashboard.viewUsageLogs}</span>
+              )}
             </div>
-          ) : (
-            <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-[11px] font-medium text-neutral-500 group-hover:text-neutral-950 transition-colors">
-              <span>{t.dashboard.viewUsageLogs}</span>
-              <ArrowUpRight className="h-3.5 w-3.5 text-neutral-400 group-hover:text-neutral-950 transition-colors" />
-            </div>
-          )}
-        </Link>
+            <ChevronRight className={metricChevron} />
+          </Link>
 
-        {/* Model Catalog */}
-        <Link
-          href="/dashboard/models"
-          className="md:col-span-4 p-5 rounded-3xl bg-white border border-neutral-200/90 shadow-xs flex flex-col justify-between hover:border-neutral-300 hover:shadow-sm transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950 group-hover:text-black truncate font-mono tabular-nums">
-                {modelCount} {t.dashboard.modelsReadyCount}
+          {/* Model Catalog */}
+          <Link href="/dashboard/models" className={metricCard}>
+            <div className="min-w-0 flex-1">
+              <span suppressHydrationWarning className="text-sm text-neutral-600">
+                {t.dashboard.exploreCatalog}
+              </span>
+              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+                {modelCount} <span className="text-base font-sans font-medium text-neutral-500">{t.dashboard.modelsReadyCount}</span>
               </div>
-              <span suppressHydrationWarning className="text-xs text-neutral-500 font-mono">
+              <span suppressHydrationWarning className="mt-1 block text-xs font-mono text-neutral-500">
                 {minInputRate > 0
                   ? `${t.dashboard.ratesFrom} Rp ${minInputRate.toLocaleString(locale === 'id' ? 'id-ID' : 'en-US')} / 1M`
                   : t.dashboard.modelsDesc}
               </span>
             </div>
-            <Cpu className="h-4 w-4 text-neutral-400 group-hover:text-neutral-950 transition-colors shrink-0 mt-0.5" />
-          </div>
-          <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between text-[11px] font-medium text-neutral-500 group-hover:text-neutral-950 transition-colors">
-            <span>{t.dashboard.exploreCatalog}</span>
-            <ArrowUpRight className="h-3.5 w-3.5 text-neutral-400 group-hover:text-neutral-950 transition-colors" />
-          </div>
-        </Link>
-      </div>
+            <ChevronRight className={metricChevron} />
+          </Link>
+        </div>
 
-      <SpendTrend days={dailySpend} balance={balance} isId={isId} />
+        <SpendTrend days={dailySpend} balance={balance} isId={isId} />
+      </section>
 
       {/* Row 3: 2-Column Split: Telemetry Feed (Left) & Quickstart Hub (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
         {/* Left Column: Live Request Telemetry Activity Feed */}
-        <div className="rounded-3xl bg-white border border-neutral-200/90 shadow-xs overflow-hidden flex flex-col h-full">
-          <div className="p-5 sm:p-6 border-b border-neutral-200/80 flex items-center justify-between gap-3 bg-neutral-50/40">
+        <div className="rounded-2xl bg-white border border-neutral-200 overflow-hidden flex flex-col h-full">
+          <div className="p-6 border-b border-neutral-200 flex items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
-                <span className="relative flex h-2 w-2">
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <h2 className="font-heading font-bold text-base text-neutral-950 tracking-tight">
-                  {t.dashboard.telemetryTitle}
-                </h2>
-              </div>
-              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
+              <h2 className="font-heading font-semibold text-lg text-neutral-950">
+                {t.dashboard.telemetryTitle}
+              </h2>
+              <p className="text-sm text-neutral-500 mt-1 line-clamp-1">
                 {t.dashboard.telemetryDesc}
               </p>
             </div>
 
             <Link
-              href="/dashboard/usage"
+              href="/dashboard/logs"
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-neutral-700 hover:text-neutral-950 cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 rounded-lg py-1 px-2.5 hover:bg-neutral-100 transition-colors shrink-0"
             >
               <span>{t.dashboard.viewFullLogs}</span>

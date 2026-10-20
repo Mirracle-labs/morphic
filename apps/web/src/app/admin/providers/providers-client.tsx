@@ -5,6 +5,7 @@ import { saveProvider, deleteProvider, toggleProviderStatus, fetchProviderCatalo
 import type { CatalogResult } from '@/lib/provider-catalog';
 import { CatalogTable } from './provider-catalog';
 import { useTranslation } from '@/lib/i18n';
+import { GATEWAY_PROVIDERS } from '@/lib/gateway-providers';
 import {
   Activity,
   Server,
@@ -41,18 +42,7 @@ interface ProvidersClientProps {
   stats: ProviderStat[];
 }
 
-const POPULAR_PRESETS = [
-  { name: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
-  { name: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1' },
-  { name: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
-  { name: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
-  { name: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
-  { name: 'mistral', label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1' },
-  { name: 'moonshot', label: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1' },
-  { name: 'minimax', label: 'MiniMax', baseUrl: 'https://api.minimax.chat/v1' },
-  { name: 'alibaba', label: 'Alibaba Cloud', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' },
-  { name: 'ollama', label: 'Ollama (Local)', baseUrl: 'http://localhost:11434/v1' },
-];
+const POPULAR_PRESETS = GATEWAY_PROVIDERS.map((p) => ({ name: p.key, label: p.label, baseUrl: p.baseUrl }));
 
 export function ProvidersClient({ initialProviders, stats }: ProvidersClientProps) {
   const { t } = useTranslation();
