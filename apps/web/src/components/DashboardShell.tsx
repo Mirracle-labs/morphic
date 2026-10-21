@@ -7,7 +7,6 @@ import { usePathname } from 'next/navigation';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits } from '@/lib/utils';
 import { LanguageToggle } from '@/components/LanguageToggle';
-import { CurrencyToggle } from '@/components/CurrencyToggle';
 import { SignOutButton } from '@/app/dashboard/sign-out';
 import GitHubIcon from '@/components/icons/GitHubIcon';
 import LinkedInIcon from '@/components/icons/LinkedInIcon';
@@ -182,13 +181,6 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
         </Link>
         <div className="md:hidden flex items-center justify-between px-3 py-2 text-sm text-neutral-700">
           <div className="flex items-center gap-3">
-            <Coins className="h-4 w-4 shrink-0 text-neutral-600" />
-            <span suppressHydrationWarning>{locale === 'en' ? 'Currency' : 'Mata Uang'}</span>
-          </div>
-          <CurrencyToggle />
-        </div>
-        <div className="md:hidden flex items-center justify-between px-3 py-2 text-sm text-neutral-700">
-          <div className="flex items-center gap-3">
             <Globe className="h-4 w-4 shrink-0 text-neutral-600" />
             <span suppressHydrationWarning>{t.dashboard.languageLabel}</span>
           </div>
@@ -310,8 +302,7 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
               {t.dashboard.topUpBtn}
             </span>
           </Link>
-          <div className="hidden md:flex items-center gap-2">
-            <CurrencyToggle />
+          <div className="hidden md:block">
             <LanguageToggle />
           </div>
           <NotificationsDrawer items={notifications} en={locale === 'en'} />
