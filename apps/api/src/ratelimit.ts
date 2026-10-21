@@ -1,4 +1,4 @@
-import { RedisRateLimitStore } from './lib/redis-store';
+import { RedisRateLimitStore, concurrencySlotTtlSeconds } from './lib/redis-store';
 import { redis } from './lib/redis';
 
 export interface IRateLimitStore {
@@ -91,7 +91,6 @@ function createStore(): IRateLimitStore {
 export const rateLimitStore: IRateLimitStore = createStore();
 
 const RATE_WINDOW_SECONDS = 60;
-const CONCURRENCY_TTL_SECONDS = 300;
 
 /** Fixed one-minute window. `scope` separates per-key (`rl`) from per-IP (`rlip`) counters. */
 export async function checkRateLimit(
@@ -117,6 +116,8 @@ export async function trackConcurrency(
   const token = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
   const setKey = `cc:${keyId}`;
   const now = Date.now();
+  // Slot TTL is derived from the upstream total timeout (must outlive the request).
+  const ttlSeconds = concurrencySlotTtlSeconds();
 
   // RedisRateLimitStore: use the atomic Lua acquire to eliminate the TOCTOU race
   // where two concurrent callers both read count < max and both get admitted.
@@ -126,13 +127,13 @@ export async function trackConcurrency(
     const { RedisRateLimitStore } = await import('./lib/redis-store');
     if (rateLimitStore instanceof RedisRateLimitStore) {
       const acquired = await rateLimitStore.acquireConcurrency(
-        setKey, token, now, max, CONCURRENCY_TTL_SECONDS,
+        setKey, token, now, max, ttlSeconds,
       );
       return { acquired, token };
     }
   }
 
-  const minTimestamp = now - CONCURRENCY_TTL_SECONDS * 1000;
+  const minTimestamp = now - ttlSeconds * 1000;
   const current = await rateLimitStore.getConcurrency(setKey, minTimestamp);
   if (current >= max) {
     return { acquired: false, token };
