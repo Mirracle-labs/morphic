@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 process.env.ANTHROPIC_ENABLED = 'true';
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
+const { invalidateRouterCache } = await import('../domain/router');
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const originalDefault = process.env.ANTHROPIC_DEFAULT_MODEL;
@@ -68,6 +69,7 @@ async function mkModel(providerId: string, contextLength = 8192) {
       outputCreditsPer1m: 1_000_000,
     })
     .returning();
+  invalidateRouterCache();
   return model!;
 }
 

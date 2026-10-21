@@ -24,6 +24,7 @@ import {
 
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
+const { invalidateRouterCache } = await import('../domain/router');
 
 const gateway = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' });
 
@@ -77,6 +78,7 @@ async function mkModel(providerId: string) {
       outputCreditsPer1m: 1_000_000,
     })
     .returning();
+  invalidateRouterCache();
   return m!;
 }
 

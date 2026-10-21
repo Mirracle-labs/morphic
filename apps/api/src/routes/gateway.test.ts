@@ -12,7 +12,7 @@ import { and, eq } from 'drizzle-orm';
 process.env.GATEWAY_IP_RPM = '3';
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
-const { callProvider } = await import('../domain/router');
+const { callProvider, invalidateRouterCache } = await import('../domain/router');
 const { recordFailure, recordSuccess, checkCircuit, computeProviderAggregate } = await import('../domain/circuit-breaker');
 const { getTrustedClientIp } = await import('../lib/ip');
 const { notifyLowBalance } = await import('../lib/notify');
@@ -60,6 +60,7 @@ async function mkModel(providerId: string, fallbackProviderId: string | null = n
       providerCostOutputPer1m: cost,
     })
     .returning();
+  invalidateRouterCache();
   return m!;
 }
 

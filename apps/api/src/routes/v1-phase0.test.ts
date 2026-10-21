@@ -12,6 +12,7 @@ import { eq } from 'drizzle-orm';
 
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
+const { invalidateRouterCache } = await import('../domain/router');
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -50,6 +51,7 @@ async function mkModel(providerId: string) {
       outputCreditsPer1m: 1_000_000,
     })
     .returning();
+  invalidateRouterCache();
   return m!;
 }
 

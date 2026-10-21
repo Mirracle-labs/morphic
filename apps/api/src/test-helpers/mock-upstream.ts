@@ -95,6 +95,94 @@ export function openThenDestroy(res: ServerResponse): void {
   }, 20);
 }
 
+/** A normal non-streaming OpenAI completion body. */
+export function okCompletionBody(content = 'ok'): Record<string, unknown> {
+  return {
+    id: 'mock-completion',
+    object: 'chat.completion',
+    model: 'upstream/internal-model',
+    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 3, completion_tokens: 2 },
+  };
+}
+
+/**
+ * Pooling 1E failure modes. `hang-before-headers` / `hang-after-headers` hold the
+ * socket until the test closes the server, so they can exercise TTFB and total
+ * timeouts without racing a fixed delay.
+ */
+export type MockUpstreamMode =
+  | 'ok'
+  | 'sse-ok'
+  | '400'
+  | '401'
+  | '402'
+  | '404'
+  | '429'
+  | '500'
+  | 'hang-before-headers'
+  | 'hang-after-headers'
+  | 'cut-mid-stream'
+  | '200-non-JSON'
+  | '200-error-body';
+
+function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function holdUntilClosed(res: ServerResponse): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (res.destroyed || res.writableEnded) {
+      resolve();
+      return;
+    }
+    res.once('close', () => resolve());
+  });
+}
+
+export async function serveMode(
+  res: ServerResponse,
+  mode: MockUpstreamMode,
+  { content = 'ok' }: { content?: string } = {},
+): Promise<void> {
+  switch (mode) {
+    case 'ok':
+      sendJson(res, 200, okCompletionBody(content));
+      return;
+    case 'sse-ok':
+      openSse(res);
+      writeSse(res, contentChunk(content));
+      writeSse(res, usageChunk(3, 2));
+      endSse(res);
+      return;
+    case '200-non-JSON':
+      if (res.destroyed || res.writableEnded) return;
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>not an OpenAI completion</html>');
+      return;
+    case '200-error-body':
+      sendJson(res, 200, { error: { message: 'mock upstream error', type: 'server_error' } });
+      return;
+    case 'hang-before-headers':
+      await holdUntilClosed(res);
+      return;
+    case 'hang-after-headers':
+      openSse(res);
+      await holdUntilClosed(res);
+      return;
+    case 'cut-mid-stream':
+      openSse(res);
+      writeSse(res, contentChunk(content));
+      await delay(20);
+      if (!res.destroyed) res.destroy();
+      return;
+    default:
+      sendJson(res, Number(mode), { error: { message: `mock upstream ${mode}` } });
+  }
+}
+
 export async function startMockUpstream(
   handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>,
 ): Promise<MockUpstream> {
