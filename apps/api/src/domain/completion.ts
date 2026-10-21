@@ -10,7 +10,7 @@ import {
   type UpstreamErrorInput,
   type UpstreamFailureKind,
 } from './router';
-import { recordFailure, recordSuccess, releaseTrial } from './circuit-breaker';
+import { recordFailure, recordSuccess, releaseTrial, getCircuitState } from './circuit-breaker';
 import { logRequest } from '../middleware/logger';
 import { notifyLowBalance } from '../lib/notify';
 import { alertNegativeMargin } from '../lib/alert';
@@ -164,6 +164,46 @@ function attemptOutcome(upstreamStatus: UpstreamErrorInput): string {
   return typeof upstreamStatus === 'number' ? `http_${upstreamStatus}` : upstreamStatus;
 }
 
+/** Reasons for every attempt that was followed by another one (i.e. caused failover). */
+function failoverReasonsFrom(attempts: CompletionAttempt[]): string[] {
+  return attempts.slice(0, -1).map((attempt) => attempt.outcome);
+}
+
+/**
+ * Structured metrics on the existing logging channel (no metrics dependency).
+ * Failover rate per model is derivable from the `[metrics] completion` lines.
+ */
+function logCompletionMetrics(input: {
+  model: string;
+  attempts: CompletionAttempt[];
+  status: 'success' | 'error' | 'partial';
+  errorType: string | null;
+  servedProviderId: string;
+}): void {
+  const failover = input.attempts.length > 1;
+  console.info('[metrics] completion', {
+    model: input.model,
+    attempts: input.attempts.length,
+    failover,
+    servedProviderId: input.servedProviderId,
+    status: input.status,
+    errorType: input.errorType,
+  });
+  if (failover) {
+    console.info('[metrics] failover', {
+      model: input.model,
+      attempts: input.attempts.length,
+      reasons: failoverReasonsFrom(input.attempts),
+    });
+  }
+  if (input.status === 'partial' && input.errorType === 'client_disconnected') {
+    console.warn('[metrics] client_disconnected_partial', {
+      model: input.model,
+      attempts: input.attempts.length,
+    });
+  }
+}
+
 /** Prompt text used only for the reservation estimate, matching the OpenAI edge. */
 export function buildPromptText(body: Record<string, unknown>): string {
   const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -218,6 +258,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
         modelAlias: publicModelId,
         resolvedModelId: null,
         providerName: null,
+        servedProviderId: null,
+        servedProviderModelId: null,
+        attempts: 0,
+        failoverReasons: [],
+        attemptLatenciesMs: [],
         promptTokens: null,
         completionTokens: null,
         creditsConsumed: null,
@@ -248,6 +293,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       modelAlias: publicModelId,
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -278,6 +328,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
         modelAlias: publicModelId,
         resolvedModelId: plan.modelId,
         providerName: null,
+        servedProviderId: null,
+        servedProviderModelId: null,
+        attempts: 0,
+        failoverReasons: [],
+        attemptLatenciesMs: [],
         promptTokens: null,
         completionTokens: null,
         creditsConsumed: null,
@@ -303,6 +358,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       modelAlias: publicModelId,
       resolvedModelId: plan.modelId,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -344,6 +404,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
         modelAlias: publicModelId,
         resolvedModelId: plan.modelId,
         providerName: route.providerName,
+        servedProviderId: null,
+        servedProviderModelId: null,
+        attempts: 0,
+        failoverReasons: [],
+        attemptLatenciesMs: [],
         promptTokens,
         completionTokens: 0,
         creditsConsumed: 0,
@@ -496,7 +561,17 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
 
     // Exactly once per attempt.
     if (outcome.norm.countAsFailure) {
+      const beforeFailure = await getCircuitState(route.providerId, route.providerModelId);
       await recordFailure(route.providerId, route.providerModelId);
+      if (beforeFailure.state !== 'open') {
+        const afterFailure = await getCircuitState(route.providerId, route.providerModelId);
+        if (afterFailure.state === 'open') {
+          console.warn('[metrics] circuit_open', {
+            model: publicModelId,
+            providerId: route.providerId,
+          });
+        }
+      }
     } else if (route.isTrial) {
       // The outcome neither succeeded nor failed the provider: free the half-open slot.
       await releaseTrial(route.providerId, route.providerModelId);
@@ -544,6 +619,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       modelAlias: publicModelId,
       resolvedModelId: failure.route.modelId,
       providerName: failure.route.providerName,
+      servedProviderId: failure.route.providerId,
+      servedProviderModelId: failure.route.providerModelId,
+      attempts: attempts.length,
+      failoverReasons: failoverReasonsFrom(attempts),
+      attemptLatenciesMs: attempts.map((attempt) => attempt.latencyMs),
       promptTokens,
       completionTokens: 0,
       creditsConsumed: settleRes.actualCredits,
@@ -552,6 +632,13 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       status: 'error',
       errorType: failure.norm.code,
       streamed: wantsStream,
+    });
+    logCompletionMetrics({
+      model: publicModelId,
+      attempts,
+      status: 'error',
+      errorType: failure.norm.code,
+      servedProviderId: failure.route.providerId,
     });
     return {
       kind: 'failure',
@@ -594,6 +681,11 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       modelAlias: publicModelId,
       resolvedModelId: servedRoute.modelId,
       providerName: servedRoute.providerName,
+      servedProviderId: servedRoute.providerId,
+      servedProviderModelId: servedRoute.providerModelId,
+      attempts: attempts.length,
+      failoverReasons: failoverReasonsFrom(attempts),
+      attemptLatenciesMs: attempts.map((attempt) => attempt.latencyMs),
       promptTokens: metrics.promptTokens,
       completionTokens: metrics.completionTokens,
       creditsConsumed: settleRes.actualCredits,
@@ -602,6 +694,13 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       status,
       errorType: metrics.errorType ?? null,
       streamed: metrics.streamed,
+    });
+    logCompletionMetrics({
+      model: publicModelId,
+      attempts,
+      status,
+      errorType: metrics.errorType ?? null,
+      servedProviderId: servedRoute.providerId,
     });
     return settleRes;
   };

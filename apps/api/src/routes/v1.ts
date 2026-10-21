@@ -10,6 +10,7 @@ import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { normalizeRequest } from '../domain/normalize';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
 import { createSseSanitizer } from '../lib/sse-sanitize';
+import { alertProviderProblem } from '../lib/alert';
 
 const v1 = new Hono();
 
@@ -155,6 +156,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: 'unknown',
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -177,6 +183,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: 'unknown',
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -208,6 +219,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: body.model,
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -250,6 +266,17 @@ v1.post('/chat/completions', async (c) => {
     signal: c.req.raw.signal,
     onPlan: (plan) => {
       if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
+    },
+    onProviderAlert: (event) => {
+      // Appendix B alerts only on provider 401/402/403/404; transport kinds are ignored.
+      if (typeof event.upstreamStatus !== 'number') return;
+      void alertProviderProblem({
+        providerId: event.providerId,
+        providerName: event.providerName,
+        status: event.upstreamStatus,
+        code: event.code,
+        requestId: event.requestId,
+      });
     },
   });
 
