@@ -243,7 +243,7 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
     const fallback = await resolveRuntimeFallback(route, publicModelId);
     if (fallback?.credential) {
       const firstStatus = 'err' in attempt ? 'network' : attempt.res.status;
-      if (normalizeUpstreamError(firstStatus).countAsFailure) {
+      if (normalizeUpstreamError(firstStatus).countAsFailure && !input.signal?.aborted) {
         await recordFailure(route.providerId);
       }
       if ('res' in attempt) await attempt.res.body?.cancel().catch(() => {});
@@ -300,7 +300,7 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       kind,
       name: (error as Error)?.name ?? 'unknown',
     });
-    if (norm.countAsFailure) await recordFailure(route.providerId);
+    if (norm.countAsFailure && !input.signal?.aborted) await recordFailure(route.providerId);
     return fail('unreachable', kind, norm, String(error));
   }
 
