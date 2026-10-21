@@ -233,9 +233,12 @@ test('0.5: a client abort before upstream headers refunds and does not count aga
 test('0.5: reasoning-only streams are estimated from reasoning deltas, not billed as zero', async () => {
   const upstream = await startMockUpstream(async (_req, res) => {
     openSse(res);
-    await streamChunks(res, [reasoningChunk('step one: inspect the request'), reasoningChunk(' step two: answer')], {
-      intervalMs: 10,
-    });
+    await streamChunks(
+      res,
+      // Cover both reasoning field names providers use.
+      [reasoningChunk('step one: inspect the request'), reasoningChunk(' step two: answer', 'reasoning')],
+      { intervalMs: 10 },
+    );
   });
   const prov = await mkProvider(upstream.baseUrl);
   const model = await mkModel(prov.id);
