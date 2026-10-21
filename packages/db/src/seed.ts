@@ -121,7 +121,7 @@ async function seed() {
         durationHours: 24 * 365,
         priceCents: 40, // same ~Rp 12.500/USD ratio as the other token packs
         currency: 'USD',
-        status: 'active',
+        status: 'inactive',
       },
       {
         name: 'Starter USD',

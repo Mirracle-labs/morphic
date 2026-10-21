@@ -53,7 +53,7 @@ export function actualUsageCredits(
  * (what checkout shows and admin reports convert with). Owner reviews it monthly (OWN-04).
  * ponytail: fixed rate; switch to a cached live rate with sanity bounds if FX moves too fast.
  */
-export const IDR_PER_USD = 16_000;
+export const IDR_PER_USD = 16_500;
 
 /** Package price in Rupiah (`priceCents` holds whole Rupiah for IDR, cents for USD). */
 export function packagePriceIdr(priceCents: number, currency: string | null | undefined): number {
