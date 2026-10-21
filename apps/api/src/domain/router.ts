@@ -3,6 +3,7 @@ import { eq, and, or } from 'drizzle-orm';
 import { resolveProviderCredential } from '@morphic/shared/provider-crypto';
 import { normalizeModelId } from '@morphic/shared/models';
 import { checkCircuit, getCircuitState } from './circuit-breaker';
+import { resolveUpstreamTotalTimeoutMs } from '../lib/redis-store';
 
 export interface ResolvedRoute {
   providerName: string;
@@ -25,10 +26,17 @@ export interface ResolvedRoute {
   ttfbTimeoutMs: number | null;
 }
 
-// Default 55s: leaves 5s buffer for DB settle before Vercel's 60s maxDuration kills the function.
-// Override with UPSTREAM_TIMEOUT_MS env var (e.g. set to 110000 if on Pro plan with 120s limit).
-const envTimeout = process.env.UPSTREAM_TIMEOUT_MS ? Number(process.env.UPSTREAM_TIMEOUT_MS) : 55_000;
-const UPSTREAM_TIMEOUT_MS = Number.isNaN(envTimeout) || envTimeout <= 0 ? 55_000 : envTimeout;
+// Total attempt timeout: UPSTREAM_TOTAL_TIMEOUT_MS -> UPSTREAM_TIMEOUT_MS -> 55 s (D13).
+
+/** Streaming only: how long the upstream may take to send response headers (Pooling 1E). */
+const DEFAULT_UPSTREAM_TTFB_TIMEOUT_MS = 15_000;
+
+export function resolveUpstreamTtfbTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.UPSTREAM_TTFB_TIMEOUT_MS;
+  if (!raw) return DEFAULT_UPSTREAM_TTFB_TIMEOUT_MS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_UPSTREAM_TTFB_TIMEOUT_MS;
+}
 
 interface ModelRow {
   modelId: string;
@@ -764,8 +772,10 @@ export interface UpstreamRequest {
   body: Record<string, unknown>;
   stream: boolean;
   signal?: AbortSignal;
-  /** Optional per-attempt total timeout; defaults to UPSTREAM_TIMEOUT_MS. */
+  /** Optional per-attempt total timeout; defaults to UPSTREAM_TOTAL_TIMEOUT_MS (D13). */
   totalTimeoutMs?: number;
+  /** Streaming only: time allowed before response headers. Defaults to the route/env value. */
+  ttfbTimeoutMs?: number;
 }
 
 export interface IAiProviderAdapter {
@@ -788,16 +798,40 @@ export class OpenAiCompatibleAdapter implements IAiProviderAdapter {
 
     // Client disconnect aborts the upstream call too, so we stop paying for tokens nobody reads.
     const timeoutMs =
-      req.totalTimeoutMs && req.totalTimeoutMs > 0 ? req.totalTimeoutMs : UPSTREAM_TIMEOUT_MS;
+      req.totalTimeoutMs && req.totalTimeoutMs > 0 ? req.totalTimeoutMs : resolveUpstreamTotalTimeoutMs();
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
-    const signal = req.signal ? AbortSignal.any([req.signal, timeoutSignal]) : timeoutSignal;
 
-    return fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal,
-    });
+    // TTFB applies only to streams: a non-stream request legitimately takes the whole
+    // generation time before headers arrive. The per-route override wins over the env default.
+    let ttfbController: AbortController | null = null;
+    let ttfbTimer: ReturnType<typeof setTimeout> | null = null;
+    if (stream) {
+      const ttfbMs =
+        req.ttfbTimeoutMs ??
+        (route.ttfbTimeoutMs != null && route.ttfbTimeoutMs > 0 ? route.ttfbTimeoutMs : undefined) ??
+        resolveUpstreamTtfbTimeoutMs();
+      ttfbController = new AbortController();
+      ttfbTimer = setTimeout(() => {
+        ttfbController!.abort(Object.assign(new Error('ttfb timeout'), { name: 'TtfbTimeoutError' }));
+      }, ttfbMs);
+    }
+
+    const signals = [timeoutSignal];
+    if (req.signal) signals.unshift(req.signal);
+    if (ttfbController) signals.push(ttfbController.signal);
+    const signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal,
+      });
+    } finally {
+      // Headers received (or the request failed): TTFB no longer applies.
+      if (ttfbTimer) clearTimeout(ttfbTimer);
+    }
   }
 }
 
@@ -819,51 +853,132 @@ export async function callProvider(req: UpstreamRequest): Promise<Response> {
   return adapter.dispatchRequest(req);
 }
 
+/** Failure classes produced by the attempt loop (Appendix B). */
+export type UpstreamFailureKind =
+  | 'timeout'
+  | 'ttfb_timeout'
+  | 'network'
+  | 'invalid_body'
+  | 'client_abort';
+
+export type UpstreamErrorInput = number | UpstreamFailureKind;
+
 export interface NormalizedError {
   type: string;
   code: string;
   httpStatus: number;
   countAsFailure: boolean;
+  /** True when another candidate may be attempted. */
+  failover: boolean;
+  /** True when the provider should raise an operator alert (rate-limited by 1F). */
+  alert: boolean;
 }
 
-export function normalizeUpstreamError(
-  upstreamStatus: number | 'timeout' | 'network',
-): NormalizedError {
-  switch (true) {
-    case upstreamStatus === 'timeout':
-      return {
-        type: 'server_error',
-        code: 'provider_timeout',
-        httpStatus: 504,
-        countAsFailure: false,
-      };
-    case upstreamStatus === 429:
-      return {
-        type: 'rate_limit_error',
-        code: 'provider_rate_limited',
-        httpStatus: 429,
-        countAsFailure: true,
-      };
-    case upstreamStatus === 401 || upstreamStatus === 403:
-      return {
-        type: 'server_error',
-        code: 'provider_auth_failed',
-        httpStatus: 503,
-        countAsFailure: false,
-      };
-    case upstreamStatus === 'network' || (typeof upstreamStatus === 'number' && upstreamStatus >= 500):
-      return {
-        type: 'server_error',
-        code: 'provider_error',
-        httpStatus: 502,
-        countAsFailure: true,
-      };
-    default:
-      return {
-        type: 'server_error',
-        code: 'provider_error',
-        httpStatus: 502,
-        countAsFailure: false,
-      };
+/**
+ * Appendix B, single source of truth. The final client envelope is built from
+ * `httpStatus`/`type`/`code`; upstream text and status are never included.
+ */
+export function normalizeUpstreamError(upstreamStatus: UpstreamErrorInput): NormalizedError {
+  if (upstreamStatus === 'client_abort') {
+    // No meaningful response: the client is gone. Never counts against the provider.
+    return {
+      type: 'server_error',
+      code: 'provider_error',
+      httpStatus: 502,
+      countAsFailure: false,
+      failover: false,
+      alert: false,
+    };
   }
+  if (upstreamStatus === 'timeout') {
+    return {
+      type: 'server_error',
+      code: 'provider_timeout',
+      httpStatus: 504,
+      countAsFailure: false,
+      failover: false,
+      alert: false,
+    };
+  }
+  if (upstreamStatus === 'ttfb_timeout') {
+    return {
+      type: 'server_error',
+      code: 'provider_timeout',
+      httpStatus: 504,
+      countAsFailure: true,
+      failover: true,
+      alert: false,
+    };
+  }
+  if (upstreamStatus === 'network' || upstreamStatus === 'invalid_body') {
+    return {
+      type: 'server_error',
+      code: 'provider_error',
+      httpStatus: 502,
+      countAsFailure: true,
+      failover: true,
+      alert: false,
+    };
+  }
+
+  const status = upstreamStatus;
+  if (status === 401 || status === 403 || status === 402) {
+    return {
+      type: 'server_error',
+      code: 'provider_auth_failed',
+      httpStatus: 503,
+      countAsFailure: true,
+      failover: true,
+      alert: true,
+    };
+  }
+  if (status === 404) {
+    return {
+      type: 'server_error',
+      code: 'provider_error',
+      httpStatus: 502,
+      countAsFailure: true,
+      failover: true,
+      alert: true,
+    };
+  }
+  if (status === 408) {
+    return {
+      type: 'server_error',
+      code: 'provider_timeout',
+      httpStatus: 504,
+      countAsFailure: true,
+      failover: true,
+      alert: false,
+    };
+  }
+  if (status === 429) {
+    return {
+      type: 'rate_limit_error',
+      code: 'provider_rate_limited',
+      httpStatus: 429,
+      countAsFailure: true,
+      failover: true,
+      alert: false,
+    };
+  }
+  if (status >= 500) {
+    return {
+      type: 'server_error',
+      code: 'provider_error',
+      httpStatus: 502,
+      countAsFailure: true,
+      failover: true,
+      alert: false,
+    };
+  }
+  // 400 / 422 and every other 4xx: the request is likely at fault, do not retry.
+  return {
+    type: 'server_error',
+    code: 'provider_error',
+    httpStatus: 502,
+    countAsFailure: false,
+    failover: false,
+    alert: false,
+  };
 }
