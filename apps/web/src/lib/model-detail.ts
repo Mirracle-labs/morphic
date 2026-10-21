@@ -1,6 +1,7 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
 import { providerBrand, type ProviderBrand } from './gateway-providers';
+import type { SnapshotModel } from './model-catalog';
 
 export interface ProviderBucket {
   /** ISO start of the hour (1D) or WIB day (1W) */
@@ -23,6 +24,7 @@ export interface ModelDetail {
     capabilities: string[];
     inputCreditsPer1m: number;
     outputCreditsPer1m: number;
+    /** 'soon' = listed in the catalog snapshot, not routed by us yet */
     status: string;
     replacementModelAlias: string | null;
     createdAt: string;
@@ -35,7 +37,9 @@ export interface ModelDetail {
   daily: ProviderBucket[];
   /** Tokens per WIB day per provider, last 30 days. */
   activity: { day: string; provider: string; tokens: number; requests: number }[];
-  related: { publicModelId: string; displayName: string; description: string | null; tokens7d: number }[];
+  related: { publicModelId: string; displayName: string; description: string | null; tokens7d: number; makerLogo?: string | null }[];
+  /** Catalog snapshot entry for this model: maker, logos, modalities, upstream providers and list price. */
+  meta?: SnapshotModel | null;
 }
 
 // Output tokens over total request time, so TTFT is included: a conservative throughput.
@@ -69,12 +73,14 @@ const toBucket = (r: { at: string; provider: string; total: number; errors: numb
   p50Tps: r.p50Tps === null ? null : Number(r.p50Tps),
 });
 
-/** Everything the public model page shows; null when the id is unknown or inactive. */
-export async function loadModelDetail(publicModelId: string): Promise<ModelDetail | null> {
+/** Everything the public model page shows; null when the id is unknown or inactive.
+ *  providerModelId is server-only (catalog matching); the page strips it before rendering. */
+export async function loadModelDetail(publicModelId: string): Promise<(ModelDetail & { providerModelId: string }) | null> {
   const [row] = await db
     .select({
       id: s.models.id,
       publicModelId: s.models.publicModelId,
+      providerModelId: s.models.providerModelId,
       displayName: s.models.displayName,
       description: s.models.description,
       contextLength: s.models.contextLength,
@@ -120,7 +126,7 @@ export async function loadModelDetail(publicModelId: string): Promise<ModelDetai
   // Base URLs never leave the server; only the recognised brand does.
   const brands = Object.fromEntries(providerRows.map((p) => [p.name, providerBrand(p.name, p.baseUrl)]));
   const byId = new Map(providerRows.map((p) => [p.id, brands[p.name]!]));
-  const { id: _id, providerId, fallbackProviderId, ...model } = row;
+  const { id: _id, providerId, fallbackProviderId, providerModelId, ...model } = row;
 
   return {
     model: { ...model, capabilities: model.capabilities ?? [], createdAt: model.createdAt.toISOString() },
@@ -134,5 +140,6 @@ export async function loadModelDetail(publicModelId: string): Promise<ModelDetai
     activity: activity.map((a) => ({ ...a, tokens: Number(a.tokens), requests: Number(a.requests) })),
     // Caller narrows these to the same maker; the maker lives in the id, not a column.
     related: siblings.map((r) => ({ ...r, tokens7d: Number(r.tokens7d) })),
+    providerModelId,
   };
 }

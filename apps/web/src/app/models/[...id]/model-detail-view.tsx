@@ -74,7 +74,8 @@ function Section({ title, subtitle, action, children }: { title: string; subtitl
   );
 }
 
-/** One provider's series as a row of bars: one ink, values in hover tooltips and a hidden table. */
+/** One provider's series as a bar chart: one ink, values in hover tooltips and a hidden table.
+ *  Uptime is a full-height status strip; other metrics scale to the window's max. */
 function ProviderStrip({
   brand,
   headline,
@@ -97,6 +98,9 @@ function ProviderStrip({
   fullHeight?: boolean;
 }) {
   const max = Math.max(0, ...values.map((v) => v ?? 0));
+  const empty = values.every((v) => v === null);
+  const height = (v: number | null) =>
+    fullHeight ? '100%' : v === null || !max ? '2px' : `max(${(v / max) * 100}%, 3px)`;
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3 text-sm">
@@ -106,18 +110,34 @@ function ProviderStrip({
         </span>
         <span className="font-semibold text-neutral-950 tabular-nums">{headline}</span>
       </div>
-      <div aria-hidden="true" className="flex h-12 items-end gap-1">
-        {values.map((v, i) => (
-          <div key={keys[i]} className="group relative flex h-full flex-1 items-end">
-            <div
-              className={`w-full rounded-[2px] ${colorOf ? colorOf(v) : v === null ? 'bg-neutral-200' : 'bg-neutral-900 group-hover:bg-neutral-500'}`}
-              style={{ height: fullHeight || v === null || !max ? '100%' : `max(${(v / max) * 100}%, 3px)` }}
-            />
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-950 px-2 py-1 text-[11px] text-white group-hover:block">
-              {keyLabel(keys[i]!, span, en)}: {format(v)}
+      <div className="flex gap-2">
+        <div aria-hidden="true" className={`relative flex flex-1 items-end gap-0.5 ${fullHeight ? 'h-10' : 'h-24 border-b border-neutral-300'}`}>
+          {!fullHeight && <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-neutral-200" />}
+          {values.map((v, i) => (
+            <div key={keys[i]} className="group relative flex h-full flex-1 items-end">
+              <div
+                className={`w-full ${fullHeight ? 'rounded-[2px]' : 'rounded-t-[4px]'} ${
+                  colorOf ? colorOf(v) : v === null ? 'bg-neutral-200' : 'bg-neutral-900 group-hover:bg-neutral-500'
+                }`}
+                style={{ height: height(v) }}
+              />
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-950 px-2 py-1 text-[11px] text-white group-hover:block">
+                {keyLabel(keys[i]!, span, en)}: {format(v)}
+              </div>
             </div>
+          ))}
+          {empty && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs font-medium text-neutral-700">
+              {en ? 'No traffic yet' : 'Belum ada trafik'}
+            </span>
+          )}
+        </div>
+        {!fullHeight && (
+          <div aria-hidden="true" className="flex h-24 w-14 shrink-0 flex-col justify-between text-right text-[11px] tabular-nums text-neutral-600">
+            <span>{max ? format(max) : '—'}</span>
+            <span>0</span>
           </div>
-        ))}
+        )}
       </div>
       <table className="sr-only">
         <caption>{brand.label}</caption>
@@ -158,44 +178,43 @@ function MetricSection({
 
   return (
     <Section title={title} subtitle={subtitle} action={<SpanToggle span={span} setSpan={setSpan} label={title} />}>
-      {rows.length === 0 ? (
-        <p className="py-6 text-center text-sm text-neutral-700">
-          {en ? 'No traffic in this window yet.' : 'Belum ada trafik di rentang ini.'}
-        </p>
-      ) : (
-        <div className="space-y-5">
-          {providers.map((p) => {
-            const byKey = new Map(rows.filter((r) => r.provider === p).map((r) => [r.at, r]));
-            const values = keys.map((k) => pick(byKey.get(k)));
-            const mine = rows.filter((r) => r.provider === p);
-            const total = mine.reduce((a, r) => a + r.total, 0);
-            const errors = mine.reduce((a, r) => a + r.errors, 0);
-            const latest = [...values].reverse().find((v) => v !== null) ?? null;
-            const headline = metric === 'uptime' ? (total ? `${(((total - errors) / total) * 100).toFixed(2)}%` : '—') : format(latest);
-            return (
-              <ProviderStrip
-                key={p}
-                brand={detail.brands[p] ?? providerBrand(p)}
-                headline={headline}
-                values={values}
-                keys={keys}
-                span={span}
-                en={en}
-                format={format}
-                fullHeight={metric === 'uptime'}
-                colorOf={
-                  metric === 'uptime'
-                    ? (v) => (v === null ? 'bg-neutral-200' : v >= 99.5 ? 'bg-emerald-500' : v >= 95 ? 'bg-amber-400' : 'bg-red-500')
-                    : undefined
-                }
-              />
-            );
-          })}
-          <p className="text-xs text-neutral-600">
-            {span === '1d' ? (en ? 'Last 24 hours, per hour.' : '24 jam terakhir, per jam.') : en ? 'Last 7 days, per day (WIB).' : '7 hari terakhir, per hari (WIB).'}
-          </p>
+      <div className="space-y-5">
+        {providers.map((p) => {
+          const byKey = new Map(rows.filter((r) => r.provider === p).map((r) => [r.at, r]));
+          const values = keys.map((k) => pick(byKey.get(k)));
+          const mine = rows.filter((r) => r.provider === p);
+          const total = mine.reduce((a, r) => a + r.total, 0);
+          const errors = mine.reduce((a, r) => a + r.errors, 0);
+          const latest = [...values].reverse().find((v) => v !== null) ?? null;
+          const headline = metric === 'uptime' ? (total ? `${(((total - errors) / total) * 100).toFixed(2)}%` : '—') : format(latest);
+          return (
+            <ProviderStrip
+              key={p}
+              brand={detail.brands[p] ?? detail.providers.find((x) => x.name === p) ?? providerBrand(p)}
+              headline={headline}
+              values={values}
+              keys={keys}
+              span={span}
+              en={en}
+              format={format}
+              fullHeight={metric === 'uptime'}
+              colorOf={
+                metric === 'uptime'
+                  ? (v) => (v === null ? 'bg-neutral-200' : v >= 99.5 ? 'bg-emerald-500' : v >= 95 ? 'bg-amber-400' : 'bg-red-500')
+                  : undefined
+              }
+            />
+          );
+        })}
+        <div aria-hidden="true" className={`flex justify-between text-[11px] text-neutral-600 ${metric === 'uptime' ? '' : 'pr-16'}`}>
+          <span>{keyLabel(keys[0]!, span, en)}</span>
+          <span>{keyLabel(keys[keys.length - 1]!, span, en)}</span>
         </div>
-      )}
+        <p className="text-xs text-neutral-600">
+          {span === '1d' ? (en ? 'Last 24 hours, per hour.' : '24 jam terakhir, per jam.') : en ? 'Last 7 days, per day (WIB).' : '7 hari terakhir, per hari (WIB).'}
+          {rows.length === 0 && (en ? ' Measured from requests through Morphic; none yet.' : ' Diukur dari request lewat Morphic; belum ada.')}
+        </p>
+      </div>
     </Section>
   );
 }
@@ -203,8 +222,13 @@ function MetricSection({
 export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; isLoggedIn: boolean }) {
   const { locale } = useTranslation();
   const en = locale === 'en';
-  const { model } = detail;
-  const maker = makerFromId(model.publicModelId);
+  const { model, meta } = detail;
+  const soon = model.status === 'soon';
+  const maker = meta?.maker ?? makerFromId(model.publicModelId);
+  const makerLogo = (cls: string) =>
+    meta?.makerLogo ? <GatewayProviderLogo brand={{ label: maker, logo: meta.makerLogo }} className={cls} /> : <ModelProviderLogo provider={model.publicModelId} className={cls} />;
+  const usdRange = (r: [number, number] | null | undefined) => (!r ? '—' : r[0] === r[1] ? `$${r[0]}` : `$${r[0]}-${r[1]}`);
+  const modalities = (list: string[] | undefined) => (list?.length ? list.map((m) => m.charAt(0).toUpperCase() + m.slice(1)).join(', ') : 'Text');
   const [copied, setCopied] = useState<string | null>(null);
   const apiRef = useRef<HTMLDialogElement>(null);
 
@@ -268,7 +292,7 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
           <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
             <div className="flex items-start gap-4 min-w-0">
               <span className="h-14 w-14 shrink-0 rounded-2xl border border-neutral-200 bg-neutral-50 flex items-center justify-center">
-                <ModelProviderLogo provider={model.publicModelId} className="h-8 w-8" />
+                {makerLogo('h-8 w-8')}
               </span>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -277,10 +301,14 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
                   </h1>
                   <span
                     className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
-                      model.status === 'active' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-900'
+                      model.status === 'active'
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                        : soon
+                          ? 'border-neutral-300 bg-neutral-100 text-neutral-800'
+                          : 'border-amber-300 bg-amber-50 text-amber-900'
                     }`}
                   >
-                    {model.status === 'active' ? (en ? 'Active' : 'Aktif') : 'Deprecated'}
+                    {model.status === 'active' ? (en ? 'Active' : 'Aktif') : soon ? 'Soon' : 'Deprecated'}
                   </span>
                 </div>
                 <button
@@ -319,33 +347,45 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
             </p>
           )}
 
-          <dl className="mt-6 grid grid-cols-2 gap-4 border-t border-neutral-200 pt-5 text-sm sm:grid-cols-4">
+          <dl className="mt-6 grid grid-cols-2 gap-4 border-t border-neutral-200 pt-5 text-sm sm:grid-cols-3 lg:grid-cols-6">
             <div>
               <dt className="text-neutral-600">{en ? 'By' : 'Oleh'}</dt>
               <dd className="mt-1 flex items-center gap-1.5 font-medium text-neutral-950">
-                <ModelProviderLogo provider={model.publicModelId} className="h-4 w-4" /> {maker}
+                {makerLogo('h-4 w-4')} {maker}
               </dd>
             </div>
             <div>
-              <dt className="text-neutral-600">{en ? 'Capabilities' : 'Kemampuan'}</dt>
-              <dd className="mt-1 flex flex-wrap gap-1">
-                {model.capabilities.length
-                  ? model.capabilities.map((c) => (
-                      <span key={c} className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs font-medium text-neutral-800">
-                        {CAP_LABELS[c.toLowerCase()]?.[en ? 'en' : 'id'] ?? c}
-                      </span>
-                    ))
-                  : '—'}
-              </dd>
+              <dt className="text-neutral-600">{en ? 'Input' : 'Input'}</dt>
+              <dd className="mt-1 font-medium text-neutral-950">{modalities(meta?.input)}</dd>
+            </div>
+            <div>
+              <dt className="text-neutral-600">{en ? 'Output' : 'Output'}</dt>
+              <dd className="mt-1 font-medium text-neutral-950">{modalities(meta?.output)}</dd>
             </div>
             <div>
               <dt className="text-neutral-600">{en ? 'Context' : 'Konteks'}</dt>
-              <dd className="mt-1 font-medium text-neutral-950 tabular-nums">{compact.format(model.contextLength)} tokens</dd>
+              <dd className="mt-1 font-medium text-neutral-950 tabular-nums">{model.contextLength ? `${compact.format(model.contextLength)} tokens` : '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-neutral-600">Max output</dt>
+              <dd className="mt-1 font-medium text-neutral-950 tabular-nums">{meta?.maxOutput ? `${compact.format(meta.maxOutput)} tokens` : '—'}</dd>
             </div>
             <div>
               <dt className="text-neutral-600">{en ? 'Published' : 'Rilis'}</dt>
-              <dd className="mt-1 font-medium text-neutral-950 tabular-nums">{model.createdAt.slice(0, 10)}</dd>
+              <dd className="mt-1 font-medium text-neutral-950 tabular-nums">{(meta?.published ?? model.createdAt).slice(0, 10) || '—'}</dd>
             </div>
+            {model.capabilities.length > 0 && (
+              <div className="col-span-2 sm:col-span-3 lg:col-span-6">
+                <dt className="text-neutral-600">{en ? 'Capabilities' : 'Kemampuan'}</dt>
+                <dd className="mt-1 flex flex-wrap gap-1">
+                  {model.capabilities.map((c) => (
+                    <span key={c} className="rounded-full border border-neutral-300 px-2 py-0.5 text-xs font-medium text-neutral-800">
+                      {CAP_LABELS[c.toLowerCase()]?.[en ? 'en' : 'id'] ?? c}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            )}
           </dl>
         </header>
 
@@ -353,7 +393,9 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
         <Section
           title="Providers"
           subtitle={
-            detail.providers.length > 1
+            soon
+              ? en ? 'Providers that serve this model upstream. Routing through Morphic is coming soon.' : 'Provider yang melayani model ini di upstream. Routing lewat Morphic segera hadir.'
+              : detail.providers.length > 1
               ? en ? 'Requests go to the primary provider; the fallback takes over when it fails.' : 'Request dikirim ke provider utama; cadangan mengambil alih saat utama gagal.'
               : en ? 'The provider that serves this model. Stats cover the last 24 hours.' : 'Provider yang melayani model ini. Statistik 24 jam terakhir.'
           }
@@ -382,14 +424,23 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
                           <div>
                             <div className="font-semibold text-neutral-950">{p.label}</div>
                             <div className="text-xs text-neutral-600">
-                              <span className="font-mono">{p.name}</span> · {p.role === 'primary' ? (en ? 'primary' : 'utama') : en ? 'fallback' : 'cadangan'}
+                              {soon ? 'upstream' : <><span className="font-mono">{p.name}</span> · {p.role === 'primary' ? (en ? 'primary' : 'utama') : en ? 'fallback' : 'cadangan'}</>}
                             </div>
                           </div>
                         </div>
                       </td>
-                      <td className={`${td} text-right`}>{compact.format(model.inputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
-                      <td className={`${td} text-right`}>{compact.format(model.outputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
-                      <td className={`${td} text-right`}>{compact.format(model.contextLength)}</td>
+                      {soon ? (
+                        <>
+                          <td className={`${td} text-right`}>{usdRange(meta?.inputUsd)}</td>
+                          <td className={`${td} text-right`}>{usdRange(meta?.outputUsd)}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className={`${td} text-right`}>{compact.format(model.inputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
+                          <td className={`${td} text-right`}>{compact.format(model.outputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
+                        </>
+                      )}
+                      <td className={`${td} text-right`}>{model.contextLength ? compact.format(model.contextLength) : '—'}</td>
                       <td className={`${td} text-right`}>{fmtLatency(st.latency)}</td>
                       <td className={`${td} text-right`}>{fmtTps(st.tps)}</td>
                       <td className={`${td} text-right`}>{st.success === null ? '—' : `${st.success.toFixed(2)}%`}</td>
@@ -427,54 +478,74 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
 
         {/* Activity */}
         <Section title={en ? 'Activity' : 'Aktivitas'} subtitle={en ? 'Tokens processed per day over the last 30 days.' : 'Token yang diproses per hari, 30 hari terakhir.'}>
-          {maxDay === 0 ? (
-            <p className="py-6 text-center text-sm text-neutral-700">{en ? 'No traffic in the last 30 days.' : 'Belum ada trafik 30 hari terakhir.'}</p>
-          ) : (
-            <div className="grid gap-6 lg:grid-cols-[1fr_16rem]">
-              <div>
-                <div aria-hidden="true" className="flex h-40 items-end gap-0.5 border-b border-neutral-300">
+          <div className="grid gap-6 lg:grid-cols-[1fr_16rem]">
+            <div>
+              <div className="flex gap-2">
+                <div aria-hidden="true" className="relative flex h-40 flex-1 items-end gap-0.5 border-b border-neutral-300">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-neutral-200" />
+                  <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-neutral-200" />
+                  {maxDay === 0 && (
+                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs font-medium text-neutral-700">
+                      {en ? 'No traffic in the last 30 days' : 'Belum ada trafik 30 hari terakhir'}
+                    </span>
+                  )}
                   {days.map((d, i) => (
                     <div key={d} className="group relative flex h-full flex-1 items-end justify-center">
-                      <div className="w-full max-w-5 rounded-t-[3px] bg-neutral-900 group-hover:bg-neutral-500" style={{ height: dayValues[i] ? `max(${(dayValues[i]! / maxDay) * 100}%, 2px)` : 0 }} />
+                      <div
+                        className={`w-full max-w-5 rounded-t-[4px] ${dayValues[i] ? 'bg-neutral-900 group-hover:bg-neutral-500' : 'bg-neutral-200'}`}
+                        style={{ height: dayValues[i] ? `max(${(dayValues[i]! / maxDay) * 100}%, 3px)` : '2px' }}
+                      />
                       <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-neutral-950 px-2 py-1 text-[11px] text-white group-hover:block">
                         {dayLabel(d)}: {compact.format(dayValues[i]!)} tokens
                       </div>
                     </div>
                   ))}
                 </div>
-                <div aria-hidden="true" className="mt-2 flex justify-between text-[11px] text-neutral-600">
-                  <span>{dayLabel(days[0]!)}</span>
-                  <span>{dayLabel(days[days.length - 1]!)}</span>
+                <div aria-hidden="true" className="flex h-40 w-12 shrink-0 flex-col justify-between text-right text-[11px] tabular-nums text-neutral-600">
+                  <span>{maxDay ? compact.format(maxDay) : '—'}</span>
+                  <span>{maxDay ? compact.format(maxDay / 2) : ''}</span>
+                  <span>0</span>
                 </div>
-                <table className="sr-only">
-                  <caption>{en ? 'Tokens per day' : 'Token per hari'}</caption>
-                  <tbody>
-                    {days.map((d, i) => (
-                      <tr key={d}><th scope="row">{dayLabel(d)}</th><td>{dayValues[i]}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
-              <div>
-                <div className="text-sm text-neutral-700">{en ? 'Total, 30 days' : 'Total 30 hari'}</div>
-                <div className="mt-1 text-3xl font-heading font-bold text-neutral-950 tabular-nums">{compact.format(totalTokens)}</div>
-                <ul className="mt-4 space-y-3">
-                  {[...perProvider.entries()].sort((a, b) => b[1].tokens - a[1].tokens).map(([p, v]) => (
-                    <li key={p}>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="flex items-center gap-2 text-neutral-950"><GatewayProviderLogo brand={detail.brands[p] ?? providerBrand(p)} className="h-4 w-4" /> {(detail.brands[p] ?? providerBrand(p)).label}</span>
-                        <span className="tabular-nums text-neutral-900">{compact.format(v.tokens)}</span>
-                      </div>
-                      <div className="mt-1 h-1.5 rounded-full bg-neutral-200" aria-hidden="true">
-                        <div className="h-full rounded-full bg-neutral-900" style={{ width: `${(v.tokens / totalTokens) * 100}%` }} />
-                      </div>
-                      <div className="mt-0.5 text-xs text-neutral-600">{((v.tokens / totalTokens) * 100).toFixed(1)}% · {compact.format(v.requests)} request</div>
-                    </li>
+              <div aria-hidden="true" className="mt-2 flex justify-between pr-14 text-[11px] text-neutral-600">
+                <span>{dayLabel(days[0]!)}</span>
+                <span>{dayLabel(days[days.length - 1]!)}</span>
+              </div>
+              <table className="sr-only">
+                <caption>{en ? 'Tokens per day' : 'Token per hari'}</caption>
+                <tbody>
+                  {days.map((d, i) => (
+                    <tr key={d}><th scope="row">{dayLabel(d)}</th><td>{dayValues[i]}</td></tr>
                   ))}
-                </ul>
-              </div>
+                </tbody>
+              </table>
             </div>
-          )}
+            <div>
+              <div className="text-sm text-neutral-700">{en ? 'Total, 30 days' : 'Total 30 hari'}</div>
+              <div className="mt-1 text-3xl font-heading font-bold text-neutral-950 tabular-nums">{compact.format(totalTokens)}</div>
+              {perProvider.size === 0 && (
+                <p className="mt-3 text-sm text-neutral-700">
+                  {soon
+                    ? en ? 'Counts start once this model is live on Morphic.' : 'Mulai dihitung setelah model ini aktif di Morphic.'
+                    : en ? 'Counts every request routed through Morphic.' : 'Menghitung tiap request yang lewat Morphic.'}
+                </p>
+              )}
+              <ul className="mt-4 space-y-3">
+                {[...perProvider.entries()].sort((a, b) => b[1].tokens - a[1].tokens).map(([p, v]) => (
+                  <li key={p}>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2 text-neutral-950"><GatewayProviderLogo brand={detail.brands[p] ?? providerBrand(p)} className="h-4 w-4" /> {(detail.brands[p] ?? providerBrand(p)).label}</span>
+                      <span className="tabular-nums text-neutral-900">{compact.format(v.tokens)}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded-full bg-neutral-200" aria-hidden="true">
+                      <div className="h-full rounded-full bg-neutral-900" style={{ width: `${(v.tokens / totalTokens) * 100}%` }} />
+                    </div>
+                    <div className="mt-0.5 text-xs text-neutral-600">{((v.tokens / totalTokens) * 100).toFixed(1)}% · {compact.format(v.requests)} request</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </Section>
 
         {/* Related */}
@@ -486,7 +557,7 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
               {detail.related.map((r) => (
                 <Link key={r.publicModelId} href={`/models/${r.publicModelId}`} className={`rounded-2xl border border-neutral-300 bg-white p-5 hover:border-neutral-950 transition-colors ${focusRing}`}>
                   <div className="flex items-center gap-3">
-                    <ModelProviderLogo provider={r.publicModelId} className="h-6 w-6" />
+                    {r.makerLogo ? <GatewayProviderLogo brand={{ label: maker, logo: r.makerLogo }} className="h-6 w-6" /> : <ModelProviderLogo provider={r.publicModelId} className="h-6 w-6" />}
                     <span className="font-semibold text-neutral-950">{maker}: {r.displayName}</span>
                   </div>
                   <div className="mt-2 text-sm text-neutral-700"><span className="font-semibold text-neutral-950 tabular-nums">{compact.format(r.tokens7d)}</span> {en ? 'tokens · 7d' : 'token · 7h'}</div>

@@ -6,20 +6,23 @@ import { alias } from 'drizzle-orm/pg-core';
 import { db, schema as s } from '@morphic/db';
 import { getSessionSafe } from '@/lib/auth';
 import Navbar from '@/components/Navbar';
-import ModelsExplorer, { type CatalogModel } from '@/components/ModelsExplorer';
+import ModelsExplorer from '@/components/ModelsExplorer';
 import Footer from '@/components/Footer';
 import { AutoRefresh } from '@/components/AutoRefresh';
 import { memo } from '@/lib/memo';
 import { providerBrand } from '@/lib/gateway-providers';
+import { makerFromId } from '@/lib/model-maker';
+import { mergeCatalog, type CatalogModel, type SnapshotModel } from '@/lib/model-catalog';
+import snapshot from '@/data/model-catalog.json';
 
 export const metadata = {
   title: 'Models Catalog | Morphic AI Gateway',
-  description: 'Jelajahi seluruh model AI DeepSeek, Qwen, Kimi, dan MiniMax dengan tarif hemat dan endpoint OpenAI-compatible.',
+  description: 'Jelajahi model AI dari OpenAI, Anthropic, Google, DeepSeek, Qwen, Kimi, MiniMax, dan lainnya lewat satu endpoint OpenAI-compatible.',
 };
 
 const HOURS = 24;
 
-/** Active models plus real traffic from request_logs: 7-day token volume and 24 hourly success buckets. */
+/** Snapshot catalog overlaid with our active models and their real traffic: 7-day tokens and 24 hourly success buckets. */
 async function loadCatalog(): Promise<CatalogModel[]> {
   const fallback = alias(s.providers, 'fallback_provider');
   const [models, volume, hourly] = await Promise.all([
@@ -27,6 +30,7 @@ async function loadCatalog(): Promise<CatalogModel[]> {
       .select({
         id: s.models.id,
         publicModelId: s.models.publicModelId,
+        providerModelId: s.models.providerModelId,
         displayName: s.models.displayName,
         description: s.models.description,
         contextLength: s.models.contextLength,
@@ -73,9 +77,10 @@ async function loadCatalog(): Promise<CatalogModel[]> {
   }
 
   // Base URLs stay on the server; only the recognised brand (label + logo) goes to the page.
-  return models.map(({ id, providerName, providerBaseUrl, fallbackName, fallbackBaseUrl, ...m }) => ({
+  const live = models.map(({ id, providerName, providerBaseUrl, fallbackName, fallbackBaseUrl, ...m }) => ({
     ...m,
     capabilities: m.capabilities ?? [],
+    maker: makerFromId(m.publicModelId),
     providers: [
       providerBrand(providerName, providerBaseUrl),
       ...(fallbackName ? [providerBrand(fallbackName, fallbackBaseUrl)] : []),
@@ -83,12 +88,13 @@ async function loadCatalog(): Promise<CatalogModel[]> {
     tokens7d: tokensBy.get(id) ?? 0,
     hourly: bucketsBy.get(id) ?? Array.from({ length: HOURS }, () => ({ total: 0, errors: 0 })),
   }));
+  return mergeCatalog(snapshot.models as SnapshotModel[], live, HOURS);
 }
 
 export default async function ModelsPage() {
   // Session and catalog in parallel. The catalog is the same for every visitor, so concurrent
   // renders share one query for 20s; AutoRefresh keeps an open tab current.
-  // An unreachable DB yields an honest empty catalog rather than a fabricated one.
+  // An unreachable DB still shows the snapshot, just with no model marked live.
   const [session, models] = await Promise.all([
     headers()
       .then((h) => getSessionSafe(h))
@@ -98,7 +104,7 @@ export default async function ModelsPage() {
       }),
     memo('public:models', 20_000, loadCatalog).catch((err) => {
       console.warn('[ModelsPage] Catalog read failed:', err);
-      return [] as CatalogModel[];
+      return mergeCatalog(snapshot.models as SnapshotModel[], [], HOURS);
     }),
   ]);
 
