@@ -1,6 +1,6 @@
 # AGENTS.md — Morphic API Protocol Track
 
-Status: Phase 0, Phase 1 and Phase 2 complete (working tree, uncommitted); Phase 3 not started.
+Status: Protocol Phases 0–2 and Pooling Phases 0/0.5/1A–1F complete and merged. Phase 3 not started; Pooling 1G deferred until 1E runs in production.
 Repo: `/home/rose/projects/morphic`.
 Scope: inbound protocol compatibility for the Hono gateway.
 
