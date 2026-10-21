@@ -10,7 +10,7 @@ import { grantCredits } from '@morphic/db/billing';
 
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
-const { getCircuitState, isCircuitOpen } = await import('../domain/circuit-breaker');
+const { getCircuitState, checkCircuit } = await import('../domain/circuit-breaker');
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -95,7 +95,7 @@ test('0c: a client abort before upstream headers does not count against the prov
   );
 
   assert.equal(res.status, 502);
-  const state = await getCircuitState(prov.id);
+  const state = await getCircuitState(prov.id, model.providerModelId);
   assert.equal(state.failures, 0, 'abort must not increment the failure counter');
-  assert.equal(await isCircuitOpen(prov.id), false);
+  assert.equal((await checkCircuit(prov.id, model.providerModelId)).open, false);
 });

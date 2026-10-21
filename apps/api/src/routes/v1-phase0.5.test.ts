@@ -226,7 +226,7 @@ test('0.5: a client abort before upstream headers refunds and does not count aga
   assert.equal(row.creditsConsumed, 0);
   assert.equal(await getBalance(user.id), before, 'full refund');
 
-  const circuit = await getCircuitState(prov.id);
+  const circuit = await getCircuitState(prov.id, model.providerModelId);
   assert.equal(circuit.failures, 0, 'an abort before headers must not count as a provider failure');
 });
 
