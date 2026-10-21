@@ -9,6 +9,8 @@ import { logRequest } from '../middleware/logger';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { normalizeRequest } from '../domain/normalize';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
+import { GENERIC_ERROR_PAYLOAD, createSseSanitizer, sanitizeCompletionBody } from '../lib/sse-sanitize';
+import { recordFailure } from '../domain/circuit-breaker';
 
 const v1 = new Hono();
 
@@ -141,8 +143,11 @@ v1.post('/chat/completions', async (c) => {
   const { keyId, userId } = c.get('apiKey');
 
   let parsed: ReturnType<typeof chatCompletionRequestSchema.safeParse>;
+  let rawBody: Record<string, unknown> | null = null;
   try {
-    parsed = chatCompletionRequestSchema.safeParse(await c.req.json());
+    const raw = await c.req.json();
+    rawBody = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    parsed = chatCompletionRequestSchema.safeParse(raw);
   } catch {
     logRequest({
       requestId,
@@ -231,6 +236,13 @@ v1.post('/chat/completions', async (c) => {
   }
 
   const wantsStream = body.stream === true;
+  // Option A: read the client's value from the raw JSON so `packages/shared` stays
+  // untouched. The adapter still forces include_usage upstream for billing.
+  const streamOptions = rawBody?.stream_options;
+  const clientWantsUsage =
+    typeof streamOptions === 'object' &&
+    streamOptions !== null &&
+    (streamOptions as Record<string, unknown>).include_usage === true;
   const result = await startCompletion({
     auth: { requestId, userId, apiKeyId: keyId },
     publicModelId: body.model,
@@ -285,7 +297,7 @@ v1.post('/chat/completions', async (c) => {
 
   const upstream = result.upstream;
 
-  // 3a. Streaming: passthrough chunks, track completion tokens from SSE data, settle accurately after stream end.
+  // 3a. Streaming: sanitize each upstream chunk before forwarding, then settle accurately.
   if (wantsStream && upstream.body) {
     return streamSSE(c, async (stream) => {
       const reader = upstream.body!.getReader();
@@ -307,107 +319,118 @@ v1.post('/chat/completions', async (c) => {
         await stream.write(text);
         heartbeat.touch();
       };
-      let buffer = '';
-      let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
-      let lastKnownCompletionTokens = 0;
-      let completionText = '';
+      const billing: {
+        usage: { prompt_tokens?: number; completion_tokens?: number } | null;
+        lastKnownCompletionTokens: number;
+        completionText: string;
+      } = { usage: null, lastKnownCompletionTokens: 0, completionText: '' };
       let failed = false;
+      let streamErrorType: string | null = null;
+      let validChunks = 0;
+      let errorPayloadSeen = false;
+
+      const sanitizer = createSseSanitizer({
+        publicModel: body.model,
+        clientWantsUsage,
+        onChunk: (chunk) => {
+          const j = chunk as { usage?: { prompt_tokens?: number; completion_tokens?: number }; choices?: { delta?: { content?: unknown } }[] };
+          if (j.usage) billing.usage = j.usage;
+          if (j.usage?.completion_tokens != null) {
+            billing.lastKnownCompletionTokens = j.usage.completion_tokens;
+          }
+          billing.completionText += deltaText(j);
+        },
+        onDrop: (reason) => {
+          if (reason === 'error_payload') errorPayloadSeen = true;
+        },
+      });
+
+      const forward = async (text: string) => {
+        if (!text) return;
+        finalizer.push(text);
+        // A forwarded payload that is not only `[DONE]` counts as a valid chunk.
+        if (!errorPayloadSeen && hasForwardedData(text)) validChunks++;
+        await writeUpstream(text);
+      };
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
-          finalizer.push(chunkText);
-          await writeUpstream(chunkText);
-          buffer += chunkText;
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data: ')) continue;
-            const data = trimmed.slice(6).trim();
-            if (!data || data === '[DONE]') continue;
-            try {
-              const j = JSON.parse(data);
-              if (j.usage) usage = j.usage;
-              if (j.usage?.completion_tokens != null) {
-                lastKnownCompletionTokens = j.usage.completion_tokens;
-              }
-              completionText += deltaText(j);
-            } catch {
-              // partial chunk, ignore
-            }
-          }
+          await forward(sanitizer.push(chunkText));
+          // An upstream error payload is terminal: stop reading and finish.
+          if (errorPayloadSeen) break;
         }
 
-        // Flush any bytes held back by the streaming decoder.
+        // Flush any bytes held back by the streaming decoder and the line buffer.
         const rest = decoder.decode();
-        if (rest) {
-          finalizer.push(rest);
-          await writeUpstream(rest);
-          buffer += rest;
-        }
+        const tail = (rest ? sanitizer.push(rest) : '') + sanitizer.flush();
+        await forward(tail);
 
-        if (buffer.trim()) {
-          const trimmed = buffer.trim();
-          if (trimmed.startsWith('data: ')) {
-            const data = trimmed.slice(6).trim();
-            if (data && data !== '[DONE]') {
-              try {
-                const j = JSON.parse(data);
-                if (j.usage) usage = j.usage;
-                if (j.usage?.completion_tokens != null) {
-                  lastKnownCompletionTokens = j.usage.completion_tokens;
-                }
-                completionText += deltaText(j);
-              } catch {
-                // ignore
-              }
-            }
-          }
-          buffer = '';
+        if (errorPayloadSeen) {
+          // The sanitizer already wrote exactly one generic error chunk.
+          failed = true;
+          streamErrorType = 'invalid_upstream_response';
+          const ending = finalizer.end();
+          if (ending) await writeUpstream(ending);
+        } else if (validChunks === 0) {
+          // Everything was dropped or empty: the upstream response is unusable.
+          failed = true;
+          streamErrorType = 'invalid_upstream_response';
+          await writeUpstream(finalizer.fail());
+        } else {
+          // Guarantee a terminator for OpenAI clients.
+          const ending = finalizer.end();
+          if (ending) await writeUpstream(ending);
         }
-
-        // Guarantee a terminator for OpenAI clients.
-        const tail = finalizer.end();
-        if (tail) await writeUpstream(tail);
       } catch {
         failed = true;
         // Sanitized error chunk, then [DONE]; never forward upstream text.
-        await stream.write(finalizer.fail());
+        if (!errorPayloadSeen) await stream.write(finalizer.fail());
       } finally {
         heartbeat.stop();
       }
 
-      const promptT = usage?.prompt_tokens ?? result.promptTokens;
+      const promptT = billing.usage?.prompt_tokens ?? result.promptTokens;
       // Upstream that ignores stream_options.include_usage: estimate from the text actually streamed.
       const completionT =
-        usage?.completion_tokens ??
-        (lastKnownCompletionTokens > 0 ? lastKnownCompletionTokens : estimatePromptTokens(completionText));
+        billing.usage?.completion_tokens ??
+        (billing.lastKnownCompletionTokens > 0
+          ? billing.lastKnownCompletionTokens
+          : estimatePromptTokens(billing.completionText));
 
       await result.finalize({
         promptTokens: promptT,
         completionTokens: completionT,
         latencyMs: Date.now() - startedAt,
         status: failed ? 'error' : 'success',
-        errorType: failed ? 'stream_disconnected' : null,
+        errorType: failed ? (streamErrorType ?? 'stream_disconnected') : null,
         streamed: true,
       });
     });
   }
 
-  // 3b. Non-streaming: read full response, settle, forward.
+  // 3b. Non-streaming: sanitize the body, settle, forward.
   const text = await upstream.text();
-  let promptT = result.promptTokens;
-  let completionT = 0;
-  try {
-    const j = JSON.parse(text);
-    promptT = j.usage?.prompt_tokens ?? result.promptTokens;
-    completionT = j.usage?.completion_tokens ?? 0;
-  } catch {
-    // non-json upstream body, keep estimates
+  const sanitized = sanitizeCompletionBody(text, body.model);
+  if (!sanitized.ok) {
+    // 2xx with an unusable body: count the served provider, refund, never echo upstream text.
+    await recordFailure(result.route.providerId);
+    await result.finalize({
+      promptTokens: result.promptTokens,
+      completionTokens: 0,
+      latencyMs: Date.now() - startedAt,
+      status: 'error',
+      errorType: 'invalid_upstream_response',
+      streamed: false,
+    });
+    return c.json(GENERIC_ERROR_PAYLOAD, 502);
   }
+
+  const usage = (sanitized.json as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
+  const promptT = usage?.prompt_tokens ?? result.promptTokens;
+  const completionT = usage?.completion_tokens ?? 0;
   await result.finalize({
     promptTokens: promptT,
     completionTokens: completionT,
@@ -416,8 +439,16 @@ v1.post('/chat/completions', async (c) => {
     streamed: false,
   });
 
-  return c.body(text, upstream.status as ContentfulStatusCode, { 'content-type': 'application/json' });
+  return c.body(sanitized.body, upstream.status as ContentfulStatusCode, { 'content-type': 'application/json' });
 });
+
+/** True when sanitized SSE text contains a data payload other than `[DONE]`. */
+function hasForwardedData(text: string): boolean {
+  return text.split('\n').some((line) => {
+    const trimmed = line.trim();
+    return trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]';
+  });
+}
 
 /** Text of one streamed chat chunk (all choices), for token estimation when usage is missing. */
 function deltaText(chunk: { choices?: { delta?: { content?: unknown } }[] }): string {

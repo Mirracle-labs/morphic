@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { db, schema as s } from '@morphic/db';
-import { grantCredits } from '@morphic/db/billing';
+import { grantCredits, getBalance } from '@morphic/db/billing';
 import { and, eq } from 'drizzle-orm';
 
 process.env.GATEWAY_IP_RPM = '3';
@@ -556,16 +556,20 @@ for (const [upstreamStatus, clientStatus, code] of [
   });
 }
 
-test('Phase1: a 200 non-JSON upstream body is passed through (pooling 0b will sanitize it)', async () => {
+test('Phase1: a 200 non-JSON upstream body is sanitized into a 502 (pooling 0b)', async () => {
   const prov = await mkProvider('nonjson', 'http://nonjson.upstream.test');
   const model = await mkModel(prov.id);
-  const { rawKey } = await mkUser(1_000_000);
+  const { user, rawKey } = await mkUser(1_000_000);
+  const before = await getBalance(user.id);
   const res = await withUpstream(
     () => new Response('not-json-at-all', { status: 200, headers: { 'content-type': 'text/html' } }),
     () => chat(rawKey, { model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
   );
-  assert.equal(res.status, 200);
-  assert.equal(await res.text(), 'not-json-at-all');
+  assert.equal(res.status, 502);
+  const text = await res.text();
+  assert.equal(text.includes('not-json-at-all'), false);
+  assert.equal(JSON.parse(text).error.code, 'provider_error');
+  assert.equal(await getBalance(user.id), before);
 });
 
 test('Phase1: an invalid x-api-key is rejected with 401 and a request_id', async () => {
