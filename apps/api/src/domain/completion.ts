@@ -47,7 +47,7 @@ export interface FinalizeInput {
   promptTokens: number;
   completionTokens: number;
   latencyMs: number;
-  status?: 'success' | 'error';
+  status?: 'success' | 'error' | 'partial';
   errorType?: string | null;
   error?: string | null;
   streamed: boolean;

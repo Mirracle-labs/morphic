@@ -12,7 +12,7 @@ export interface RequestLogInput {
   creditsConsumed: number | null;
   latencyMs: number | null;
   gatewayLatencyMs: number | null;
-  status: 'success' | 'error' | 'cancelled';
+  status: 'success' | 'error' | 'cancelled' | 'partial';
   errorType: string | null;
   streamed: boolean;
 }

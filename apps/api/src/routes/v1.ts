@@ -303,20 +303,39 @@ v1.post('/chat/completions', async (c) => {
       const reader = upstream.body!.getReader();
       const decoder = new TextDecoder();
       const finalizer = createOpenAiStreamFinalizer();
+      // Two independent failure sources: the upstream reader and the client-facing
+      // writer. They must not be conflated, or a disconnect becomes a free request.
+      let clientGone = false;
+      let upstreamBroke = false;
+      const markClientGone = () => {
+        clientGone = true;
+      };
+      if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+      stream.onAbort(markClientGone);
+
       // Heartbeats are idle-only: `touch()` on every upstream byte keeps them from
       // firing during an active stream, and `atLineBoundary` prevents injecting a
       // comment into a partially written `data:` line.
       let atLineBoundary = true;
       const heartbeat = startHeartbeat(
         () => {
-          void stream.write(': keepalive\n\n');
+          if (!clientGone) void stream.write(': keepalive\n\n');
         },
         heartbeatMs(),
         () => !finalizer.done && atLineBoundary,
       );
       const writeUpstream = async (text: string) => {
+        if (clientGone || stream.aborted || c.req.raw.signal.aborted) {
+          clientGone = true;
+          return;
+        }
         atLineBoundary = text.endsWith('\n');
-        await stream.write(text);
+        try {
+          await stream.write(text);
+        } catch {
+          clientGone = true;
+        }
+        if (stream.aborted) clientGone = true;
         heartbeat.touch();
       };
       const billing: {
@@ -324,8 +343,6 @@ v1.post('/chat/completions', async (c) => {
         lastKnownCompletionTokens: number;
         completionText: string;
       } = { usage: null, lastKnownCompletionTokens: 0, completionText: '' };
-      let failed = false;
-      let streamErrorType: string | null = null;
       let validChunks = 0;
       let errorPayloadSeen = false;
 
@@ -354,40 +371,59 @@ v1.post('/chat/completions', async (c) => {
       };
 
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunkText = decoder.decode(value, { stream: true });
+        while (!clientGone) {
+          // A disconnect can land between reads; do not wait for the next failing read.
+          if (c.req.raw.signal.aborted || stream.aborted) {
+            clientGone = true;
+            break;
+          }
+          let read: ReadableStreamReadResult<Uint8Array>;
+          try {
+            read = await reader.read();
+          } catch {
+            // An aborted upstream fetch is usually the client's abort racing through
+            // AbortSignal.any; distinguish it from an upstream that actually broke.
+            if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+            else upstreamBroke = true;
+            break;
+          }
+          if (read.done) break;
+          const chunkText = decoder.decode(read.value, { stream: true });
           await forward(sanitizer.push(chunkText));
+          if (clientGone) break;
           // An upstream error payload is terminal: stop reading and finish.
           if (errorPayloadSeen) break;
         }
 
-        // Flush any bytes held back by the streaming decoder and the line buffer.
-        const rest = decoder.decode();
-        const tail = (rest ? sanitizer.push(rest) : '') + sanitizer.flush();
-        await forward(tail);
-
-        if (errorPayloadSeen) {
-          // The sanitizer already wrote exactly one generic error chunk.
-          failed = true;
-          streamErrorType = 'invalid_upstream_response';
-          const ending = finalizer.end();
-          if (ending) await writeUpstream(ending);
-        } else if (validChunks === 0) {
-          // Everything was dropped or empty: the upstream response is unusable.
-          failed = true;
-          streamErrorType = 'invalid_upstream_response';
-          await writeUpstream(finalizer.fail());
+        if (clientGone) {
+          // Stop paying the upstream for tokens nobody will read.
+          await reader.cancel().catch(() => {});
         } else {
-          // Guarantee a terminator for OpenAI clients.
-          const ending = finalizer.end();
-          if (ending) await writeUpstream(ending);
+          // Flush any bytes held back by the streaming decoder and the line buffer.
+          const rest = decoder.decode();
+          const tail = (rest ? sanitizer.push(rest) : '') + sanitizer.flush();
+          await forward(tail);
+
+          if (errorPayloadSeen) {
+            // The sanitizer already wrote exactly one generic error chunk.
+            const ending = finalizer.end();
+            if (ending) await writeUpstream(ending);
+          } else if (upstreamBroke || validChunks === 0) {
+            // Sanitized error chunk, then [DONE]; never forward upstream text.
+            await writeUpstream(finalizer.fail());
+          } else {
+            // Guarantee a terminator for OpenAI clients.
+            const ending = finalizer.end();
+            if (ending) await writeUpstream(ending);
+          }
         }
       } catch {
-        failed = true;
-        // Sanitized error chunk, then [DONE]; never forward upstream text.
-        if (!errorPayloadSeen) await stream.write(finalizer.fail());
+        // Unexpected failure outside read/write (sanitizer/decoder): treat as upstream break.
+        if (!clientGone) {
+          upstreamBroke = true;
+          // Sanitized error chunk, then [DONE]; never forward upstream text.
+          if (!errorPayloadSeen) await writeUpstream(finalizer.fail());
+        }
       } finally {
         heartbeat.stop();
       }
@@ -400,12 +436,34 @@ v1.post('/chat/completions', async (c) => {
           ? billing.lastKnownCompletionTokens
           : estimatePromptTokens(billing.completionText));
 
+      // D8: a disconnect after upstream headers is chargeable (`partial`, even with
+      // zero output). An upstream break is chargeable only once tokens were delivered,
+      // unless the operator opted into refunding those breaks.
+      let status: 'success' | 'error' | 'partial';
+      let streamErrorType: string | null = null;
+      if (clientGone) {
+        status = 'partial';
+        streamErrorType = 'client_disconnected';
+      } else if (errorPayloadSeen) {
+        status = 'error';
+        streamErrorType = 'invalid_upstream_response';
+      } else if (upstreamBroke) {
+        const chargePartial = completionT > 0 && process.env.PARTIAL_BILLING_UPSTREAM_BREAK !== 'refund';
+        status = chargePartial ? 'partial' : 'error';
+        streamErrorType = 'stream_disconnected';
+      } else if (validChunks === 0) {
+        status = 'error';
+        streamErrorType = 'invalid_upstream_response';
+      } else {
+        status = 'success';
+      }
+
       await result.finalize({
         promptTokens: promptT,
         completionTokens: completionT,
         latencyMs: Date.now() - startedAt,
-        status: failed ? 'error' : 'success',
-        errorType: failed ? (streamErrorType ?? 'stream_disconnected') : null,
+        status,
+        errorType: streamErrorType,
         streamed: true,
       });
     });
@@ -450,11 +508,20 @@ function hasForwardedData(text: string): boolean {
   });
 }
 
-/** Text of one streamed chat chunk (all choices), for token estimation when usage is missing. */
-function deltaText(chunk: { choices?: { delta?: { content?: unknown } }[] }): string {
+/**
+ * Text of one streamed chat chunk (all choices), for token estimation when usage
+ * is missing. Reasoning models bill output tokens for `reasoning_content`
+ * (DeepSeek/ZenMux) or `reasoning`, so count those too.
+ */
+function deltaText(chunk: {
+  choices?: { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[];
+}): string {
   let out = '';
   for (const ch of chunk.choices ?? []) {
-    if (typeof ch.delta?.content === 'string') out += ch.delta.content;
+    const delta = ch.delta;
+    if (typeof delta?.content === 'string') out += delta.content;
+    if (typeof delta?.reasoning_content === 'string') out += delta.reasoning_content;
+    if (typeof delta?.reasoning === 'string') out += delta.reasoning;
   }
   return out;
 }

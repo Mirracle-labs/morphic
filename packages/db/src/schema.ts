@@ -189,7 +189,8 @@ export const requestLogs = pgTable(
     creditsConsumed: bigint('credits_consumed', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
     gatewayLatencyMs: integer('gateway_latency_ms'),
-    status: text('status', { enum: ['success', 'error', 'cancelled'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` needs no migration.
+    status: text('status', { enum: ['success', 'error', 'cancelled', 'partial'] }).notNull(),
     errorType: text('error_type'),
     streamed: boolean('streamed').notNull().default(false),
     createdAt: now(),
@@ -342,7 +343,8 @@ export const usageRecords = pgTable(
     // Null when the model has no provider cost configured.
     upstreamCostCredits: bigint('upstream_cost_credits', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
-    status: text('status', { enum: ['success', 'error'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` = delivered tokens, stream not completed.
+    status: text('status', { enum: ['success', 'error', 'partial'] }).notNull(),
     error: text('error'),
     streamed: boolean('streamed').notNull().default(false),
     createdAt: now(),
