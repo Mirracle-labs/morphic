@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { Loader2, CheckCircle2, XCircle, RotateCw, X, Copy, Check } from 'lucide-react';
 import { GIFT_CARD_DESIGNS, type GiftCardDesign } from '@morphic/shared/types';
 import { useTranslation } from '@/lib/i18n';
+import { useCurrency } from '@/lib/currency';
+import { CurrencyToggle } from '@/components/CurrencyToggle';
 import { formatCredits, formatTokenEstimate } from '@/lib/utils';
 import { redeemCodeDirect } from '@/lib/actions';
 import { CheckoutModal } from '../billing/checkout-modal';
@@ -103,13 +105,21 @@ export function RedeemView({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const giftDialogRef = useRef<HTMLDialogElement>(null);
   const [giftDesign, setGiftDesign] = useState<GiftCardDesign>(GIFT_CARD_DESIGNS[0]);
-  const [giftPkgId, setGiftPkgId] = useState(giftPackages[0]?.id ?? '');
+  const { currency: currentCurrency } = useCurrency();
+  const displayedGiftPackages = giftPackages.filter((p) => {
+    const pkgCurr = p.currency === 'USD' ? 'USD' : 'IDR';
+    return pkgCurr === currentCurrency;
+  });
+  const [giftPkgId, setGiftPkgId] = useState<string>('');
+  const activeGiftPkgId = displayedGiftPackages.some((p) => p.id === giftPkgId)
+    ? giftPkgId
+    : (displayedGiftPackages[0]?.id ?? '');
   const [giftEmail, setGiftEmail] = useState('');
   const [checkout, setCheckout] = useState<{ pkg: GiftPackage; gift: { design: string; recipientEmail: string | null } } | null>(null);
   const [giftPaid, setGiftPaid] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const router = useRouter();
-  const giftPkg = giftPackages.find((p) => p.id === giftPkgId);
+  const giftPkg = displayedGiftPackages.find((p) => p.id === activeGiftPkgId);
 
   const openGift = () => {
     setGiftPaid(false);
@@ -505,14 +515,17 @@ export function RedeemView({
               </fieldset>
 
               <fieldset>
-                <legend className="text-sm text-neutral-800 mb-2">{en ? 'Choose an amount' : 'Pilih nominal'}</legend>
-                {giftPackages.length === 0 ? (
+                <div className="flex items-center justify-between mb-2">
+                  <legend className="text-sm text-neutral-800">{en ? 'Choose an amount' : 'Pilih nominal'}</legend>
+                  <CurrencyToggle />
+                </div>
+                {displayedGiftPackages.length === 0 ? (
                   <p className="text-sm text-neutral-600">
                     {en ? 'No credit packages are on sale right now.' : 'Belum ada paket kredit yang dijual saat ini.'}
                   </p>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {giftPackages.map((p) => (
+                    {displayedGiftPackages.map((p) => (
                       <label
                         key={p.id}
                         className="cursor-pointer rounded-xl border border-neutral-200 px-3 py-2.5 text-center has-[:checked]:border-neutral-950 has-[:checked]:ring-1 has-[:checked]:ring-neutral-950 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-neutral-500"
@@ -521,7 +534,7 @@ export function RedeemView({
                           type="radio"
                           name="amount"
                           value={p.id}
-                          checked={giftPkgId === p.id}
+                          checked={activeGiftPkgId === p.id}
                           onChange={() => setGiftPkgId(p.id)}
                           className="sr-only"
                         />

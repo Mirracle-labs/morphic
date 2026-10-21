@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { downloadCsv } from '@/lib/csv';
 import { useTranslation } from '@/lib/i18n';
+import { useCurrency } from '@/lib/currency';
+import { CurrencyToggle } from '@/components/CurrencyToggle';
 import { formatCredits, cn } from '@/lib/utils';
 import { Zap, CreditCard, Clock, Wallet, QrCode, Coins, Sparkles, Download, Loader2, FileText, ArrowRight } from 'lucide-react';
 import {
@@ -124,7 +126,7 @@ export function BillingView({
       <span>{locale === 'en' ? 'Export CSV' : 'Ekspor CSV'}</span>
     </button>
   );
-  const currentCurrency = locale === 'id' ? 'IDR' : 'USD';
+  const { currency: currentCurrency } = useCurrency();
 
   const displayedPackages = initialPackages.filter((p) => {
     const pkgCurr = p.currency === 'USD' ? 'USD' : 'IDR';
@@ -319,11 +321,12 @@ export function BillingView({
                 </h2>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-2 text-xs font-mono font-bold text-neutral-800 bg-neutral-100/90 px-3.5 py-1.5 rounded-full border border-neutral-200/90 shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <CurrencyToggle />
+                <span className="hidden sm:inline-flex items-center gap-2 text-xs font-mono font-bold text-neutral-800 bg-neutral-100/90 px-3 py-1.5 rounded-full border border-neutral-200/90 shadow-2xs">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span>
-                    {currentCurrency === 'IDR' ? '🇮🇩 IDR · QRIS & Duitku' : '🌐 USD · PayPal & Cards'}
+                    {currentCurrency === 'IDR' ? '🇮🇩 QRIS & Duitku' : '🌐 PayPal & Cards'}
                   </span>
                 </span>
               </div>
@@ -338,8 +341,8 @@ export function BillingView({
                 </p>
                 <p className="mt-1.5 text-xs text-neutral-500 max-w-sm mx-auto leading-relaxed">
                   {locale === 'en'
-                    ? 'Check back shortly or change language in the sidebar to view other currency plans.'
-                    : 'Silakan periksa kembali nanti atau ganti bahasa di sidebar untuk melihat paket lainnya.'}
+                    ? 'Check back shortly or switch currency above to view other currency plans.'
+                    : 'Silakan periksa kembali nanti atau ganti mata uang di atas untuk melihat paket lainnya.'}
                 </p>
               </div>
             )}
