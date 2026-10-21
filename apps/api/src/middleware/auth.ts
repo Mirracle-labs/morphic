@@ -16,63 +16,77 @@ declare module 'hono' {
   }
 }
 
-/** mp-* Bearer token → SHA-256 lookup → user. No Better Auth involvement. */
-export async function apiKeyAuth(c: Context, next: Next) {
-  const header = c.req.header('authorization');
-  if (!header?.startsWith('Bearer mp-')) {
-    return c.json(
-      { error: { message: 'missing or invalid api key', type: 'auth_error', code: 'missing_api_key' } },
-      401,
-    );
-  }
-  const raw = header.slice('Bearer '.length).trim();
-  const hash = createHash('sha256').update(raw).digest('hex');
+export interface ApiKeyAuthOptions {
+  /** Also accept Anthropic-style `x-api-key`. Inference routes only. */
+  allowXApiKey?: boolean;
+}
 
-  const [key] = await db
-    .select({
-      id: s.apiKeys.id,
-      userId: s.apiKeys.userId,
-      status: s.apiKeys.status,
-      expiresAt: s.apiKeys.expiresAt,
-    })
-    .from(s.apiKeys)
-    .where(and(eq(s.apiKeys.keyHash, hash), eq(s.apiKeys.status, 'active')))
-    .limit(1);
+/** mp-* key (Bearer, or `x-api-key` when allowed) → SHA-256 lookup → user. */
+export function apiKeyAuth(options: ApiKeyAuthOptions = {}) {
+  return async (c: Context, next: Next) => {
+    const bearer = c.req.header('authorization');
+    const apiKeyHeader = options.allowXApiKey ? c.req.header('x-api-key') : undefined;
+    const raw = bearer?.startsWith('Bearer mp-')
+      ? bearer.slice('Bearer '.length).trim()
+      : apiKeyHeader?.startsWith('mp-')
+        ? apiKeyHeader.trim()
+        : null;
 
-  if (!key) {
-    return c.json(
-      { error: { message: 'invalid or revoked api key', type: 'auth_error', code: 'invalid_api_key' } },
-      401,
-    );
-  }
+    if (!raw) {
+      return c.json(
+        { error: { message: 'missing or invalid api key', type: 'auth_error', code: 'missing_api_key' } },
+        401,
+      );
+    }
 
-  if (key.expiresAt && key.expiresAt < new Date()) {
-    return c.json(
-      { error: { message: 'api key has expired', type: 'auth_error', code: 'api_key_expired' } },
-      401,
-    );
-  }
+    const hash = createHash('sha256').update(raw).digest('hex');
 
-  const [user] = await db
-    .select({ suspended: s.users.suspended })
-    .from(s.users)
-    .where(eq(s.users.id, key.userId))
-    .limit(1);
-  if (!user || user.suspended) {
-    return c.json(
-      { error: { message: 'account suspended', type: 'auth_error', code: 'account_suspended' } },
-      403,
-    );
-  }
+    const [key] = await db
+      .select({
+        id: s.apiKeys.id,
+        userId: s.apiKeys.userId,
+        status: s.apiKeys.status,
+        expiresAt: s.apiKeys.expiresAt,
+      })
+      .from(s.apiKeys)
+      .where(and(eq(s.apiKeys.keyHash, hash), eq(s.apiKeys.status, 'active')))
+      .limit(1);
 
-  // touch last_used_at (blocking to ensure connection is released before next)
-  await db.update(s.apiKeys)
-    .set({ lastUsedAt: new Date() })
-    .where(eq(s.apiKeys.id, key.id))
-    .catch(() => {});
+    if (!key) {
+      return c.json(
+        { error: { message: 'invalid or revoked api key', type: 'auth_error', code: 'invalid_api_key' } },
+        401,
+      );
+    }
 
-  c.set('apiKey', { keyId: key.id, userId: key.userId });
-  await next();
+    if (key.expiresAt && key.expiresAt < new Date()) {
+      return c.json(
+        { error: { message: 'api key has expired', type: 'auth_error', code: 'api_key_expired' } },
+        401,
+      );
+    }
+
+    const [user] = await db
+      .select({ suspended: s.users.suspended })
+      .from(s.users)
+      .where(eq(s.users.id, key.userId))
+      .limit(1);
+    if (!user || user.suspended) {
+      return c.json(
+        { error: { message: 'account suspended', type: 'auth_error', code: 'account_suspended' } },
+        403,
+      );
+    }
+
+    // touch last_used_at (blocking to ensure connection is released before next)
+    await db.update(s.apiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(s.apiKeys.id, key.id))
+      .catch(() => {});
+
+    c.set('apiKey', { keyId: key.id, userId: key.userId });
+    await next();
+  };
 }
 
 function rateLimited(c: Context, message: string, code: string, retryAfter: number) {

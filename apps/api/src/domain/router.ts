@@ -191,6 +191,8 @@ export interface UpstreamRequest {
   body: Record<string, unknown>;
   stream: boolean;
   signal?: AbortSignal;
+  /** Optional per-attempt total timeout; defaults to UPSTREAM_TIMEOUT_MS. */
+  totalTimeoutMs?: number;
 }
 
 export interface IAiProviderAdapter {
@@ -212,7 +214,9 @@ export class OpenAiCompatibleAdapter implements IAiProviderAdapter {
     if (route.credential) headers['authorization'] = `Bearer ${route.credential}`;
 
     // Client disconnect aborts the upstream call too, so we stop paying for tokens nobody reads.
-    const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+    const timeoutMs =
+      req.totalTimeoutMs && req.totalTimeoutMs > 0 ? req.totalTimeoutMs : UPSTREAM_TIMEOUT_MS;
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = req.signal ? AbortSignal.any([req.signal, timeoutSignal]) : timeoutSignal;
 
     return fetch(url, {

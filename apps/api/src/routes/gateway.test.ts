@@ -362,9 +362,9 @@ test('agentic tool calling: assistant message with content: null and tool_calls 
   const fwdMessages = (forwardedBody as { messages: Array<Record<string, unknown>> }).messages;
   assert.equal(fwdMessages.length, 3);
 
-  // Assistant turn: content null allowed & tool_calls preserved
+  // Assistant turn: content null is normalized to "" & tool_calls preserved
   assert.equal(fwdMessages[1]!.role, 'assistant');
-  assert.equal(fwdMessages[1]!.content, null);
+  assert.equal(fwdMessages[1]!.content, '');
   assert.deepEqual(fwdMessages[1]!.tool_calls, [
     {
       id: 'call_1',
@@ -377,5 +377,301 @@ test('agentic tool calling: assistant message with content: null and tool_calls 
   assert.equal(fwdMessages[2]!.role, 'tool');
   assert.equal(fwdMessages[2]!.tool_call_id, 'call_1');
   assert.equal(fwdMessages[2]!.content, '4');
+});
+
+// ── Phase 1: auth headers, CORS, limits, normalization, stream finalization ──
+
+test('Phase1: Bearer mp- key still authenticates chat completions', async () => {
+  const prov = await mkProvider('bearer', 'http://bearer.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  const res = await withUpstream(() => okCompletion('ok'), () =>
+    chat(rawKey, { model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
+  );
+  assert.equal(res.status, 200);
+});
+
+test('Phase1: x-api-key authenticates chat completions', async () => {
+  const prov = await mkProvider('xkey', 'http://xkey.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  const res = await withUpstream(() => okCompletion('ok'), async () =>
+    app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'x-api-key': rawKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
+    }),
+  );
+  assert.equal(res.status, 200);
+});
+
+test('Phase1: x-api-key is rejected on non-inference routes', async () => {
+  const res = await app.request('/v1/models', { headers: { 'x-api-key': 'mp-anything' } });
+  assert.equal(res.status, 401);
+});
+
+test('Phase1: CORS preflight allows anthropic and api-key headers', async () => {
+  const res = await app.request('/v1/chat/completions', {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'http://localhost:3000',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'x-api-key,anthropic-version',
+    },
+  });
+  const allowed = (res.headers.get('access-control-allow-headers') ?? '').toLowerCase();
+  for (const header of ['x-api-key', 'anthropic-version', 'anthropic-beta', 'x-goog-api-key']) {
+    assert.ok(allowed.includes(header), `missing ${header} in: ${allowed}`);
+  }
+});
+
+test('Phase1: more than 2000 messages is rejected before any upstream call', async () => {
+  const prov = await mkProvider('cap', 'http://cap.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  let hit = false;
+  const messages = Array.from({ length: 2001 }, (_, i) => ({ role: 'user', content: `m${i}` }));
+  const res = await withUpstream(
+    () => {
+      hit = true;
+      return okCompletion();
+    },
+    () => chat(rawKey, { model: model.publicModelId, messages }),
+  );
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error.code, 'too_many_messages');
+  assert.equal(hit, false);
+});
+
+test('Phase1: orphan tool messages are dropped before dispatch', async () => {
+  const prov = await mkProvider('orphan', 'http://orphan.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  let forwarded: Array<Record<string, unknown>> = [];
+  const res = await withUpstream(
+    (_url, init) => {
+      forwarded = JSON.parse(String(init.body)).messages;
+      return okCompletion('ok');
+    },
+    () =>
+      chat(rawKey, {
+        model: model.publicModelId,
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'tool', tool_call_id: 'gone', content: '1' },
+        ],
+      }),
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(forwarded.map((m) => m.role), ['user']);
+});
+
+test('Phase1: a missing tool result is synthesized before dispatch', async () => {
+  const prov = await mkProvider('missing', 'http://missing.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  let forwarded: Array<Record<string, unknown>> = [];
+  const res = await withUpstream(
+    (_url, init) => {
+      forwarded = JSON.parse(String(init.body)).messages;
+      return okCompletion('ok');
+    },
+    () =>
+      chat(rawKey, {
+        model: model.publicModelId,
+        messages: [
+          { role: 'user', content: 'hi' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'calc', arguments: '{}' } }],
+          },
+        ],
+      }),
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(forwarded.map((m) => m.role), ['user', 'assistant', 'tool']);
+  assert.equal(forwarded[2]!.tool_call_id, 'c1');
+  assert.equal(forwarded[2]!.content, 'error: tool result missing');
+});
+
+test('Phase1: streaming always ends with [DONE] even when the upstream omits it', async () => {
+  const prov = await mkProvider('nodone', 'http://nodone.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })}\n\n`;
+  const res = await withUpstream(
+    () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    () => chat(rawKey, { model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+  );
+  assert.equal(res.status, 200);
+  assert.ok((await res.text()).trimEnd().endsWith('data: [DONE]'));
+});
+
+test('Phase1: a mid-stream upstream break yields a sanitized error chunk and [DONE]', async () => {
+  const prov = await mkProvider('brk', 'http://brk.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`));
+      controller.error(new Error('boom-secret'));
+    },
+  });
+  const res = await withUpstream(
+    () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    () => chat(rawKey, { model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+  );
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.ok(text.includes('provider_error'));
+  assert.ok(text.trimEnd().endsWith('data: [DONE]'));
+  assert.equal(text.includes('boom-secret'), false);
+});
+
+// Phase 1.2 freezes the existing OpenAI error mapping. Upstream text/status/provider
+// never reach the client; `request_id` is always present.
+for (const [upstreamStatus, clientStatus, code] of [
+  [400, 502, 'provider_error'],
+  [401, 503, 'provider_auth_failed'],
+  [429, 429, 'provider_rate_limited'],
+  [500, 502, 'provider_error'],
+] as const) {
+  test(`Phase1: upstream ${upstreamStatus} keeps its current OpenAI mapping and leaks nothing`, async () => {
+    const prov = await mkProvider(`map${upstreamStatus}`, `http://map${upstreamStatus}.upstream.test`);
+    const model = await mkModel(prov.id);
+    const { rawKey } = await mkUser(1_000_000);
+    const res = await withUpstream(
+      () => new Response('upstream-secret-detail', { status: upstreamStatus, headers: { 'content-type': 'text/html' } }),
+      () => chat(rawKey, { model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
+    );
+    assert.equal(res.status, clientStatus);
+    const text = await res.text();
+    assert.equal(text.includes('upstream-secret-detail'), false);
+    const body = JSON.parse(text);
+    assert.equal(body.error.code, code);
+    assert.equal('status' in body.error, false);
+    assert.ok(body.error.request_id);
+    assert.equal(body.error.request_id, res.headers.get('x-request-id'));
+  });
+}
+
+test('Phase1: a 200 non-JSON upstream body is passed through (pooling 0b will sanitize it)', async () => {
+  const prov = await mkProvider('nonjson', 'http://nonjson.upstream.test');
+  const model = await mkModel(prov.id);
+  const { rawKey } = await mkUser(1_000_000);
+  const res = await withUpstream(
+    () => new Response('not-json-at-all', { status: 200, headers: { 'content-type': 'text/html' } }),
+    () => chat(rawKey, { model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
+  );
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'not-json-at-all');
+});
+
+test('Phase1: an invalid x-api-key is rejected with 401 and a request_id', async () => {
+  const prov = await mkProvider('badkey', 'http://badkey.upstream.test');
+  const model = await mkModel(prov.id);
+  let hit = false;
+  const res = await withUpstream(
+    () => {
+      hit = true;
+      return okCompletion();
+    },
+    async () =>
+      app.request('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'x-api-key': 'mp-not-a-real-key', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
+      }),
+  );
+  assert.equal(res.status, 401);
+  assert.equal(hit, false);
+  assert.ok((await res.json()).error.request_id);
+});
+
+test('Phase1: an idle stream receives : keepalive comments', async () => {
+  const original = process.env.SSE_HEARTBEAT_MS;
+  process.env.SSE_HEARTBEAT_MS = '40';
+  try {
+    const prov = await mkProvider('beat', 'http://beat.upstream.test');
+    const model = await mkModel(prov.id);
+    const { rawKey } = await mkUser(1_000_000);
+    const chunk = `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })}\n\n`;
+    let upstream: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        upstream = controller;
+        controller.enqueue(new TextEncoder().encode(chunk));
+      },
+    });
+    const res = await withUpstream(
+      () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      () => chat(rawKey, { model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+    );
+    assert.equal(res.status, 200);
+    // The handler has returned, so the heartbeat timer is armed. Leave the upstream
+    // idle long enough for at least one beat, then finish the stream.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    upstream!.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+    upstream!.close();
+    const text = await res.text();
+    assert.ok(text.includes(': keepalive'), 'expected at least one keepalive comment');
+    assert.ok(text.trimEnd().endsWith('data: [DONE]'));
+  } finally {
+    if (original === undefined) delete process.env.SSE_HEARTBEAT_MS;
+    else process.env.SSE_HEARTBEAT_MS = original;
+  }
+});
+
+test('Phase1: a client abort mid-stream still settles the request exactly once', async () => {
+  const prov = await mkProvider('abort', 'http://abort.upstream.test');
+  const model = await mkModel(prov.id);
+  const { user, rawKey } = await mkUser(1_000_000);
+  const ac = new AbortController();
+  let upstreamAborted = false;
+  let upstreamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      upstreamController = controller;
+      controller.enqueue(
+        new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })}\n\n`),
+      );
+    },
+  });
+  const res = await withUpstream(
+    (_url, init) => {
+      init.signal?.addEventListener('abort', () => {
+        upstreamAborted = true;
+        try {
+          upstreamController?.error(new DOMException('aborted', 'AbortError'));
+        } catch {
+          // already closed
+        }
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    },
+    async () =>
+      app.request('/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${rawKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+        signal: ac.signal,
+      }),
+  );
+  assert.equal(res.status, 200);
+  const reader = res.body!.getReader();
+  const first = await reader.read();
+  assert.ok(first.value && first.value.length > 0);
+  ac.abort();
+  await reader.cancel().catch(() => {});
+  assert.equal(upstreamAborted, true);
+
+  let rows: Array<typeof s.usageRecords.$inferSelect> = [];
+  for (let i = 0; i < 50 && rows.length === 0; i++) {
+    rows = await db.select().from(s.usageRecords).where(eq(s.usageRecords.userId, user.id));
+    if (rows.length === 0) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(rows.length, 1, 'settle must run once after a client abort');
+  assert.equal(rows[0]!.streamed, true);
 });
 
