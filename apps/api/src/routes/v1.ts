@@ -4,23 +4,39 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { streamSSE } from 'hono/streaming';
 import { chatCompletionRequestSchema } from '@morphic/shared/types';
 import { estimatePromptTokens } from '@morphic/shared/credits';
-import {
-  resolveModelWithFallback,
-  resolveRuntimeFallback,
-  callProvider,
-  normalizeUpstreamError,
-  type ResolvedRoute,
-} from '../domain/router';
-import { recordSuccess, recordFailure } from '../domain/circuit-breaker';
+import { startCompletion } from '../domain/completion';
 import { logRequest } from '../middleware/logger';
-import { reserve, settle, InsufficientCreditsError } from '@morphic/db/billing';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
-import { notifyLowBalance } from '../lib/notify';
-import { alertNegativeMargin } from '../lib/alert';
+import { normalizeRequest } from '../domain/normalize';
+import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
 
 const v1 = new Hono();
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // PRD §14.1
+const MAX_MESSAGES = (() => {
+  const value = Number(process.env.MAX_MESSAGES ?? 2000);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 2000;
+})(); // Per-request cap for both protocols.
+const NORMALIZE_OPENAI = process.env.NORMALIZE_OPENAI !== 'false';
+
+/** Anthropic-edge alias exposed to Claude clients; the route maps it to ANTHROPIC_DEFAULT_MODEL. */
+const CLAUDE_ALIAS_ID = 'claude-sonnet-4-5';
+const anthropicEnabled = () => process.env.ANTHROPIC_ENABLED === 'true';
+const anthropicDefaultModel = () => process.env.ANTHROPIC_DEFAULT_MODEL?.trim();
+
+function claudeAliasEntry() {
+  return {
+    id: CLAUDE_ALIAS_ID,
+    object: 'model',
+    created: 0,
+    owned_by: 'morphic',
+    display_name: 'Claude Sonnet 4.5 (alias)',
+    context_length: 200_000,
+    capabilities: ['tools', 'vision', 'reasoning'],
+    status: 'active' as const,
+    replacement_model_alias: anthropicDefaultModel() ?? null,
+  };
+}
 
 // Size cap first, before auth or JSON parsing touch the body.
 v1.use(
@@ -37,10 +53,8 @@ v1.use(
 
 // Apply API key authentication and rate limiting specifically to inference & model endpoints
 // '/models/*' also matches '/models' itself; a separate '/models' entry ran the guards twice.
-v1.use('/models/*', ipRateLimit, apiKeyAuth, gatewayGuards({ rpm: 120, concurrency: 5 }));
-v1.use('/chat/*', ipRateLimit, apiKeyAuth, gatewayGuards({ rpm: 120, concurrency: 5 }));
-
-const isTimeoutError = (e: unknown) => (e as Error)?.name === 'TimeoutError' || String(e).includes('timeout');
+v1.use('/models/*', ipRateLimit, apiKeyAuth(), gatewayGuards({ rpm: 120, concurrency: 5 }));
+v1.use('/chat/*', ipRateLimit, apiKeyAuth({ allowXApiKey: true }), gatewayGuards({ rpm: 120, concurrency: 5 }));
 
 v1.get('/models', async (c) => {
   const { db, schema: s } = await import('@morphic/db');
@@ -57,24 +71,29 @@ v1.get('/models', async (c) => {
     .from(s.models)
     .where(inArray(s.models.status, ['active', 'deprecated']));
 
-  return c.json({
-    object: 'list',
-    data: rows.map((m) => ({
-      id: m.id,
-      object: 'model',
-      created: 0,
-      owned_by: 'morphic',
-      display_name: m.displayName,
-      context_length: m.contextLength,
-      capabilities: m.capabilities,
-      status: m.status,
-      replacement_model_alias: m.replacementModelAlias,
-    })),
-  });
+  const data = rows.map((m) => ({
+    id: m.id,
+    object: 'model',
+    created: 0,
+    owned_by: 'morphic',
+    display_name: m.displayName,
+    context_length: m.contextLength,
+    capabilities: m.capabilities,
+    status: m.status,
+    replacement_model_alias: m.replacementModelAlias,
+  }));
+
+  // Additive Anthropic alias whenever the edge is enabled.
+  if (anthropicEnabled()) data.unshift(claudeAliasEntry());
+
+  return c.json({ object: 'list', data });
 });
 
 v1.get('/models/:id', async (c) => {
   const modelId = c.req.param('id');
+  if (modelId === CLAUDE_ALIAS_ID && anthropicEnabled()) {
+    return c.json(claudeAliasEntry());
+  }
   const { db, schema: s } = await import('@morphic/db');
   const { eq, and, inArray } = await import('drizzle-orm');
   const [m] = await db
@@ -120,7 +139,6 @@ v1.post('/chat/completions', async (c) => {
   const requestId = c.get('requestId');
   const startedAt = Date.now();
   const { keyId, userId } = c.get('apiKey');
-  const t = (label: string) => console.log(`[${requestId.slice(0,8)}] +${Date.now()-startedAt}ms ${label}`);
 
   let parsed: ReturnType<typeof chatCompletionRequestSchema.safeParse>;
   try {
@@ -176,10 +194,9 @@ v1.post('/chat/completions', async (c) => {
       400,
     );
   }
-  const body = parsed.data;
+  let body = parsed.data;
 
-  const resolved = await resolveModelWithFallback(body.model);
-  if (!resolved) {
+  if (body.messages.length > MAX_MESSAGES) {
     logRequest({
       requestId,
       userId,
@@ -193,258 +210,103 @@ v1.post('/chat/completions', async (c) => {
       latencyMs: Date.now() - startedAt,
       gatewayLatencyMs: Date.now() - startedAt,
       status: 'error',
-      errorType: 'model_not_found',
+      errorType: 'too_many_messages',
       streamed: body.stream === true,
     });
     return c.json(
       {
         error: {
-          message: `model '${body.model}' not found or unavailable`,
+          message: `too many messages, maximum is ${MAX_MESSAGES}`,
           type: 'invalid_request_error',
-          code: 'model_not_found',
+          code: 'too_many_messages',
         },
       },
-      404,
+      400,
     );
   }
 
-  let route: ResolvedRoute = resolved;
-
-  if (route.deprecationWarning) {
-    c.header('X-Morphic-Warning', route.deprecationWarning);
+  // Repair lenient client payloads (content: null, orphan tool pairs, ...) before dispatch.
+  if (NORMALIZE_OPENAI) {
+    body = normalizeRequest(body as unknown as Record<string, unknown>) as unknown as typeof body;
   }
 
-  if (!route.credential) {
-    logRequest({
-      requestId,
-      userId,
-      apiKeyId: keyId,
-      modelAlias: body.model,
-      resolvedModelId: route.modelId,
-      providerName: route.providerName,
-      promptTokens: null,
-      completionTokens: null,
-      creditsConsumed: null,
-      latencyMs: Date.now() - startedAt,
-      gatewayLatencyMs: Date.now() - startedAt,
-      status: 'error',
-      errorType: 'provider_not_configured',
-      streamed: body.stream === true,
-    });
-    return c.json(
-      {
-        error: {
-          message: 'provider credential not configured',
-          type: 'server_error',
-          code: 'provider_not_configured',
-        },
-      },
-      503,
-    );
-  }
-
-  let promptText = body.messages
-    .map((m) => {
-      if (typeof m.content === 'string') return m.content;
-      if (m.content != null) return JSON.stringify(m.content);
-      if (m.tool_calls != null) return JSON.stringify(m.tool_calls);
-      return '';
-    })
-    .join('\n');
-  if (Array.isArray(body.tools) && body.tools.length > 0) {
-    promptText += '\n' + JSON.stringify(body.tools);
-  }
-  const promptTokens = estimatePromptTokens(promptText);
   const wantsStream = body.stream === true;
+  const result = await startCompletion({
+    auth: { requestId, userId, apiKeyId: keyId },
+    publicModelId: body.model,
+    body: body as unknown as Record<string, unknown>,
+    wantsStream,
+    signal: c.req.raw.signal,
+    onRoute: (route) => {
+      if (route.deprecationWarning) c.header('X-Morphic-Warning', route.deprecationWarning);
+    },
+  });
 
-  t('reserve: start');
-  // 1. Reserve (estimate ceiling, hard-bounded)
-  let reservation;
-  try {
-    reservation = await reserve({
-      userId,
-      apiKeyId: keyId,
-      model: { id: route.modelId, contextLength: route.contextLength, pricing: route.pricing },
-      promptTokens,
-      requestedMaxTokens: body.max_tokens ?? null,
-      requestId,
-    });
-  } catch (e) {
-    t('reserve: FAILED');
-    if (e instanceof InsufficientCreditsError) {
-      logRequest({
-        requestId,
-        userId,
-        apiKeyId: keyId,
-        modelAlias: body.model,
-        resolvedModelId: route.modelId,
-        providerName: route.providerName,
-        promptTokens,
-        completionTokens: 0,
-        creditsConsumed: 0,
-        latencyMs: Date.now() - startedAt,
-        gatewayLatencyMs: Date.now() - startedAt,
-        status: 'error',
-        errorType: 'insufficient_credits',
-        streamed: wantsStream,
-      });
+  if (result.kind === 'refusal') {
+    if (result.reason === 'model_not_found') {
       return c.json(
-        { error: { message: e.message, type: 'insufficient_credits', code: 'insufficient_credits' } },
-        402,
+        { error: { message: result.message, type: 'invalid_request_error', code: 'model_not_found' } },
+        404,
       );
     }
-    throw e;
-  }
-
-  t('reserve: done');
-
-  // 2. Call provider (generic OpenAI-compatible adapter)
-  const gatewayLatencyMs = Date.now() - startedAt;
-
-  t('callProvider: start');
-  const dispatch = async (r: ResolvedRoute): Promise<{ res: Response } | { err: unknown }> => {
-    try {
-      return {
-        res: await callProvider({
-          route: r,
-          body: body as unknown as Record<string, unknown>,
-          stream: wantsStream,
-          signal: c.req.raw.signal,
-        }),
-      };
-    } catch (err) {
-      return { err };
+    if (result.reason === 'provider_not_configured') {
+      return c.json(
+        {
+          error: {
+            message: 'provider credential not configured',
+            type: 'server_error',
+            code: 'provider_not_configured',
+          },
+        },
+        503,
+      );
     }
-  };
-  let attempt = await dispatch(route);
-
-  // Runtime failover: primary unreachable or 5xx -> one retry on the model's fallback provider,
-  // under the same reservation. Timeouts are not retried (no time budget left), nor are clients
-  // that already disconnected.
-  const retryable =
-    'err' in attempt ? !isTimeoutError(attempt.err) && !c.req.raw.signal.aborted : attempt.res.status >= 500;
-  if (retryable) {
-    const fallback = await resolveRuntimeFallback(route, body.model);
-    if (fallback?.credential) {
-      if (normalizeUpstreamError('err' in attempt ? 'network' : attempt.res.status).countAsFailure) {
-        await recordFailure(route.providerId);
-      }
-      if ('res' in attempt) await attempt.res.body?.cancel().catch(() => {});
-      t(`failover: ${route.providerName} -> ${fallback.providerName}`);
-      route = fallback;
-      attempt = await dispatch(route);
-    }
-  }
-
-  if ('err' in attempt) {
-    const e = attempt.err;
-    t('callProvider: FAILED (network/timeout)');
-    const isTimeout = isTimeoutError(e);
-    const norm = normalizeUpstreamError(isTimeout ? 'timeout' : 'network');
-
-    if (norm.countAsFailure) {
-      await recordFailure(route.providerId);
-    }
-
-    const settleRes = await settle({
-      reservation,
-      userId,
-      promptTokens,
-      completionTokens: 0,
-      pricing: route.pricing,
-      upstreamPricing: route.upstreamPricing,
-      requestId,
-      status: 'error',
-      error: String(e),
-      latencyMs: Date.now() - startedAt,
-      streamed: wantsStream,
-    });
-
-    logRequest({
-      requestId,
-      userId,
-      apiKeyId: keyId,
-      modelAlias: body.model,
-      resolvedModelId: route.modelId,
-      providerName: route.providerName,
-      promptTokens,
-      completionTokens: 0,
-      creditsConsumed: settleRes.actualCredits,
-      latencyMs: Date.now() - startedAt,
-      gatewayLatencyMs,
-      status: 'error',
-      errorType: norm.code,
-      streamed: wantsStream,
-    });
-
     return c.json(
-      { error: { message: 'upstream provider unreachable', type: norm.type, code: norm.code } },
-      norm.httpStatus as ContentfulStatusCode,
+      { error: { message: result.message, type: 'insufficient_credits', code: 'insufficient_credits' } },
+      402,
     );
   }
-  const upstream = attempt.res;
 
-  t(`callProvider: done status=${upstream.status}`);
-
-  if (!upstream.ok) {
-    const norm = normalizeUpstreamError(upstream.status);
-    if (norm.countAsFailure) {
-      await recordFailure(route.providerId);
-    }
-
-    const errText = await upstream.text().catch(() => '');
-    const settleRes = await settle({
-      reservation,
-      userId,
-      promptTokens,
-      completionTokens: 0,
-      pricing: route.pricing,
-      upstreamPricing: route.upstreamPricing,
-      requestId,
-      status: 'error',
-      error: `upstream ${upstream.status}: ${errText.slice(0, 500)}`,
-      latencyMs: Date.now() - startedAt,
-      streamed: wantsStream,
-    });
-
-    logRequest({
-      requestId,
-      userId,
-      apiKeyId: keyId,
-      modelAlias: body.model,
-      resolvedModelId: route.modelId,
-      providerName: route.providerName,
-      promptTokens,
-      completionTokens: 0,
-      creditsConsumed: settleRes.actualCredits,
-      latencyMs: Date.now() - startedAt,
-      gatewayLatencyMs,
-      status: 'error',
-      errorType: norm.code,
-      streamed: wantsStream,
-    });
-
+  if (result.kind === 'failure') {
     return c.json(
       {
         error: {
-          message: 'upstream provider error',
-          type: norm.type,
-          code: norm.code,
-          status: upstream.status,
+          message:
+            result.failureKind === 'unreachable'
+              ? 'upstream provider unreachable'
+              : 'upstream provider error',
+          type: result.norm.type,
+          code: result.norm.code,
         },
       },
-      norm.httpStatus as ContentfulStatusCode,
+      result.norm.httpStatus as ContentfulStatusCode,
     );
   }
 
-  // Record provider success for Circuit Breaker
-  await recordSuccess(route.providerId);
+  const upstream = result.upstream;
 
   // 3a. Streaming: passthrough chunks, track completion tokens from SSE data, settle accurately after stream end.
   if (wantsStream && upstream.body) {
     return streamSSE(c, async (stream) => {
       const reader = upstream.body!.getReader();
       const decoder = new TextDecoder();
+      const finalizer = createOpenAiStreamFinalizer();
+      // Heartbeats are idle-only: `touch()` on every upstream byte keeps them from
+      // firing during an active stream, and `atLineBoundary` prevents injecting a
+      // comment into a partially written `data:` line.
+      let atLineBoundary = true;
+      const heartbeat = startHeartbeat(
+        () => {
+          void stream.write(': keepalive\n\n');
+        },
+        heartbeatMs(),
+        () => !finalizer.done && atLineBoundary,
+      );
+      const writeUpstream = async (text: string) => {
+        atLineBoundary = text.endsWith('\n');
+        await stream.write(text);
+        heartbeat.touch();
+      };
       let buffer = '';
       let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
       let lastKnownCompletionTokens = 0;
@@ -456,7 +318,8 @@ v1.post('/chat/completions', async (c) => {
           const { done, value } = await reader.read();
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
-          await stream.write(chunkText);
+          finalizer.push(chunkText);
+          await writeUpstream(chunkText);
           buffer += chunkText;
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
@@ -477,6 +340,15 @@ v1.post('/chat/completions', async (c) => {
             }
           }
         }
+
+        // Flush any bytes held back by the streaming decoder.
+        const rest = decoder.decode();
+        if (rest) {
+          finalizer.push(rest);
+          await writeUpstream(rest);
+          buffer += rest;
+        }
+
         if (buffer.trim()) {
           const trimmed = buffer.trim();
           if (trimmed.startsWith('data: ')) {
@@ -496,42 +368,28 @@ v1.post('/chat/completions', async (c) => {
           }
           buffer = '';
         }
+
+        // Guarantee a terminator for OpenAI clients.
+        const tail = finalizer.end();
+        if (tail) await writeUpstream(tail);
       } catch {
         failed = true;
+        // Sanitized error chunk, then [DONE]; never forward upstream text.
+        await stream.write(finalizer.fail());
+      } finally {
+        heartbeat.stop();
       }
 
-      const promptT = usage?.prompt_tokens ?? promptTokens;
+      const promptT = usage?.prompt_tokens ?? result.promptTokens;
       // Upstream that ignores stream_options.include_usage: estimate from the text actually streamed.
       const completionT =
         usage?.completion_tokens ??
         (lastKnownCompletionTokens > 0 ? lastKnownCompletionTokens : estimatePromptTokens(completionText));
 
-      const settleRes = await settle({
-        reservation,
-        userId,
+      await result.finalize({
         promptTokens: promptT,
         completionTokens: completionT,
-        pricing: route.pricing,
-        upstreamPricing: route.upstreamPricing,
-        requestId,
-        status: failed ? 'error' : 'success',
         latencyMs: Date.now() - startedAt,
-        streamed: true,
-      });
-      afterSettle(userId, reservation.sourceType, body.model, settleRes);
-
-      logRequest({
-        requestId,
-        userId,
-        apiKeyId: keyId,
-        modelAlias: body.model,
-        resolvedModelId: route.modelId,
-        providerName: route.providerName,
-        promptTokens: promptT,
-        completionTokens: completionT,
-        creditsConsumed: settleRes.actualCredits,
-        latencyMs: Date.now() - startedAt,
-        gatewayLatencyMs,
         status: failed ? 'error' : 'success',
         errorType: failed ? 'stream_disconnected' : null,
         streamed: true,
@@ -541,61 +399,25 @@ v1.post('/chat/completions', async (c) => {
 
   // 3b. Non-streaming: read full response, settle, forward.
   const text = await upstream.text();
-  let promptT = promptTokens;
+  let promptT = result.promptTokens;
   let completionT = 0;
   try {
     const j = JSON.parse(text);
-    promptT = j.usage?.prompt_tokens ?? promptTokens;
+    promptT = j.usage?.prompt_tokens ?? result.promptTokens;
     completionT = j.usage?.completion_tokens ?? 0;
   } catch {
     // non-json upstream body, keep estimates
   }
-  const settleRes = await settle({
-    reservation,
-    userId,
+  await result.finalize({
     promptTokens: promptT,
     completionTokens: completionT,
-    pricing: route.pricing,
-    upstreamPricing: route.upstreamPricing,
-    requestId,
-    status: 'success',
     latencyMs: Date.now() - startedAt,
-    streamed: false,
-  });
-  afterSettle(userId, reservation.sourceType, body.model, settleRes);
-
-  logRequest({
-    requestId,
-    userId,
-    apiKeyId: keyId,
-    modelAlias: body.model,
-    resolvedModelId: route.modelId,
-    providerName: route.providerName,
-    promptTokens: promptT,
-    completionTokens: completionT,
-    creditsConsumed: settleRes.actualCredits,
-    latencyMs: Date.now() - startedAt,
-    gatewayLatencyMs,
     status: 'success',
-    errorType: null,
     streamed: false,
   });
 
   return c.body(text, upstream.status as ContentfulStatusCode, { 'content-type': 'application/json' });
 });
-
-/** Post-settlement side effects; fire-and-forget so they never delay or fail the response. */
-function afterSettle(
-  userId: string,
-  source: 'balance' | 'entitlement',
-  model: string,
-  res: { actualCredits: number; upstreamCostCredits: number | null },
-) {
-  if (source === 'balance') void notifyLowBalance(userId);
-  if (res.upstreamCostCredits != null && res.actualCredits < res.upstreamCostCredits) {
-    void alertNegativeMargin(model, res.actualCredits, res.upstreamCostCredits);
-  }
-}
 
 /** Text of one streamed chat chunk (all choices), for token estimation when usage is missing. */
 function deltaText(chunk: { choices?: { delta?: { content?: unknown } }[] }): string {
