@@ -210,7 +210,7 @@ export class OpenAiCompatibleAdapter implements IAiProviderAdapter {
       payload.stream_options = { ...opts, include_usage: true };
     }
 
-    const headers: Record<string, string> = { 'content-type': 'application/json', 'connection': 'close' };
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (route.credential) headers['authorization'] = `Bearer ${route.credential}`;
 
     // Client disconnect aborts the upstream call too, so we stop paying for tokens nobody reads.
