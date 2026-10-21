@@ -474,7 +474,7 @@ v1.post('/chat/completions', async (c) => {
   const sanitized = sanitizeCompletionBody(text, body.model);
   if (!sanitized.ok) {
     // 2xx with an unusable body: count the served provider, refund, never echo upstream text.
-    await recordFailure(result.route.providerId);
+    await recordFailure(result.route.providerId, result.route.providerModelId);
     await result.finalize({
       promptTokens: result.promptTokens,
       completionTokens: 0,

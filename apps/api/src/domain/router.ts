@@ -2,7 +2,7 @@ import { db, schema as s } from '@morphic/db';
 import { eq, and, or } from 'drizzle-orm';
 import { resolveProviderCredential } from '@morphic/shared/provider-crypto';
 import { normalizeModelId } from '@morphic/shared/models';
-import { isCircuitOpen } from './circuit-breaker';
+import { checkCircuit } from './circuit-breaker';
 
 export interface ResolvedRoute {
   providerName: string;
@@ -119,7 +119,7 @@ export async function resolveModelWithFallback(
   if (row.modelStatus === 'deprecated' && row.replacementModelAlias) {
     const replacementRow = await resolveModelRow(row.replacementModelAlias);
     if (replacementRow && replacementRow.modelStatus === 'active' && replacementRow.providerStatus === 'active') {
-      if (!(await isCircuitOpen(replacementRow.providerId))) {
+      if (!(await checkCircuit(replacementRow.providerId, replacementRow.providerModelId)).open) {
         return buildRoute(replacementRow, {
           isUsingFallback: false,
           deprecationWarning: `model '${publicModelId}' is deprecated; redirected to '${row.replacementModelAlias}'`,
@@ -129,7 +129,7 @@ export async function resolveModelWithFallback(
   }
 
   // 2. Primary Provider Check
-  if (row.providerStatus === 'active' && !(await isCircuitOpen(row.providerId))) {
+  if (row.providerStatus === 'active' && !(await checkCircuit(row.providerId, row.providerModelId)).open) {
     return buildRoute(row, {
       isUsingFallback: false,
       deprecationWarning: row.modelStatus === 'deprecated' ? `model '${publicModelId}' is deprecated` : null,
@@ -155,7 +155,7 @@ async function resolveFallback(row: ModelRow, publicModelId: string): Promise<Re
       .where(and(eq(s.providers.id, row.fallbackProviderId), eq(s.providers.status, 'active')))
       .limit(1);
 
-    if (fallbackProvider && !(await isCircuitOpen(fallbackProvider.id))) {
+    if (fallbackProvider && !(await checkCircuit(fallbackProvider.id, row.providerModelId)).open) {
       return buildRoute(row, {
         providerOverride: fallbackProvider,
         isUsingFallback: true,

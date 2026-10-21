@@ -244,7 +244,7 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
     if (fallback?.credential) {
       const firstStatus = 'err' in attempt ? 'network' : attempt.res.status;
       if (normalizeUpstreamError(firstStatus).countAsFailure && !input.signal?.aborted) {
-        await recordFailure(route.providerId);
+        await recordFailure(route.providerId, route.providerModelId);
       }
       if ('res' in attempt) await attempt.res.body?.cancel().catch(() => {});
       route = fallback;
@@ -300,21 +300,21 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
       kind,
       name: (error as Error)?.name ?? 'unknown',
     });
-    if (norm.countAsFailure && !input.signal?.aborted) await recordFailure(route.providerId);
+    if (norm.countAsFailure && !input.signal?.aborted) await recordFailure(route.providerId, route.providerModelId);
     return fail('unreachable', kind, norm, String(error));
   }
 
   const upstream = attempt.res;
   if (!upstream.ok) {
     const norm = normalizeUpstreamError(upstream.status);
-    if (norm.countAsFailure) await recordFailure(route.providerId);
+    if (norm.countAsFailure) await recordFailure(route.providerId, route.providerModelId);
     // Internal only: status is never returned to the client.
     console.warn('[gateway] upstream status', { requestId, status: upstream.status });
     const errText = await upstream.text().catch(() => '');
     return fail('upstream', upstream.status, norm, `upstream ${upstream.status}: ${errText.slice(0, 500)}`);
   }
 
-  await recordSuccess(route.providerId);
+  await recordSuccess(route.providerId, route.providerModelId);
 
   const finalize = async (metrics: FinalizeInput): Promise<FinalizedCompletion> => {
     const status = metrics.status ?? 'success';
