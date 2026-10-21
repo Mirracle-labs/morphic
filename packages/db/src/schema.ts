@@ -230,6 +230,12 @@ export const requestLogs = pgTable(
     modelAlias: text('model_alias').notNull(),
     resolvedModelId: uuid('resolved_model_id').references(() => models.id, { onDelete: 'set null' }),
     providerName: text('provider_name'),
+    // Pooling 1F observability (internal only; never returned to clients).
+    servedProviderId: uuid('served_provider_id'),
+    servedProviderModelId: text('served_provider_model_id'),
+    attempts: integer('attempts'),
+    failoverReasons: jsonb('failover_reasons').$type<string[]>(),
+    attemptLatenciesMs: jsonb('attempt_latencies_ms').$type<number[]>(),
     promptTokens: integer('prompt_tokens'),
     completionTokens: integer('completion_tokens'),
     creditsConsumed: bigint('credits_consumed', { mode: 'number' }),
