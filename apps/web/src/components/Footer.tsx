@@ -5,12 +5,7 @@ import Link from 'next/link';
 import { useTranslation } from '@/lib/i18n';
 import { Mail, MapPin, Phone, Clock } from 'lucide-react';
 
-// Support contact details displayed in the footer
-export const SUPPORT_PHONE =
-  process.env.NEXT_PUBLIC_SUPPORT_PHONE || '+62 889-7694-9503';
-export const SUPPORT_EMAIL = 'hello@mirraclefoundation.com';
-export const SUPPORT_ADDRESS = 'Taman Kenari Jagorawi Blok 10, Citeureup, Kab. Bogor';
-export const SUPPORT_HOURS = 'Senin - Jumat 09:00 - 17:00 WIB';
+import { SUPPORT_ADDRESS, SUPPORT_EMAIL, SUPPORT_HOURS, SUPPORT_PHONE } from '@/lib/contact';
 
 export default function Footer() {
   const { t } = useTranslation();

@@ -9,6 +9,8 @@ import { formatCredits } from '@/lib/utils';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { SignOutButton } from '@/app/dashboard/sign-out';
 import GitHubIcon from '@/components/icons/GitHubIcon';
+import LinkedInIcon from '@/components/icons/LinkedInIcon';
+import { SUPPORT_EMAIL } from '@/lib/contact';
 import { NotificationsDrawer } from '@/components/NotificationsDrawer';
 import { useLocalStorage } from '@/lib/use-local-storage';
 import type { NotificationItem } from '@/lib/notifications';
@@ -24,6 +26,7 @@ import {
   Globe,
   KeyRound,
   LayoutDashboard,
+  Mail,
   Menu,
   Gift,
   X,
@@ -184,7 +187,7 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           </div>
           <LanguageToggle />
         </div>
-        <div className="flex items-center gap-1 px-1">
+        <div className="flex items-center justify-center gap-1 px-1">
           <a
             href="https://github.com/Mirracle-labs"
             target="_blank"
@@ -193,6 +196,23 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
             className={`w-10 h-10 flex items-center justify-center rounded-lg text-neutral-700 hover:text-neutral-950 hover:bg-white/70 transition-colors ${focusRing}`}
           >
             <GitHubIcon className="h-5 w-5" />
+          </a>
+          <a
+            href="https://www.linkedin.com/company/143706990/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="LinkedIn"
+            className={`w-10 h-10 flex items-center justify-center rounded-lg text-neutral-700 hover:text-neutral-950 hover:bg-white/70 transition-colors ${focusRing}`}
+          >
+            <LinkedInIcon className="h-5 w-5" />
+          </a>
+          <a
+            href={`mailto:${SUPPORT_EMAIL}`}
+            aria-label={`Email ${SUPPORT_EMAIL}`}
+            title={SUPPORT_EMAIL}
+            className={`w-10 h-10 flex items-center justify-center rounded-lg text-neutral-700 hover:text-neutral-950 hover:bg-white/70 transition-colors ${focusRing}`}
+          >
+            <Mail className="h-5 w-5" />
           </a>
         </div>
       </div>
