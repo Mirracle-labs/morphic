@@ -4,13 +4,12 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { streamSSE } from 'hono/streaming';
 import { chatCompletionRequestSchema } from '@morphic/shared/types';
 import { estimatePromptTokens } from '@morphic/shared/credits';
-import { startCompletion } from '../domain/completion';
+import { startCompletion, retryAfterSeconds } from '../domain/completion';
 import { logRequest } from '../middleware/logger';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { normalizeRequest } from '../domain/normalize';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
-import { GENERIC_ERROR_PAYLOAD, createSseSanitizer, sanitizeCompletionBody } from '../lib/sse-sanitize';
-import { recordFailure } from '../domain/circuit-breaker';
+import { createSseSanitizer } from '../lib/sse-sanitize';
 
 const v1 = new Hono();
 
@@ -249,8 +248,8 @@ v1.post('/chat/completions', async (c) => {
     body: body as unknown as Record<string, unknown>,
     wantsStream,
     signal: c.req.raw.signal,
-    onRoute: (route) => {
-      if (route.deprecationWarning) c.header('X-Morphic-Warning', route.deprecationWarning);
+    onPlan: (plan) => {
+      if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
     },
   });
 
@@ -259,6 +258,12 @@ v1.post('/chat/completions', async (c) => {
       return c.json(
         { error: { message: result.message, type: 'invalid_request_error', code: 'model_not_found' } },
         404,
+      );
+    }
+    if (result.reason === 'routing_unavailable') {
+      return c.json(
+        { error: { message: 'routing unavailable', type: 'server_error', code: 'routing_unavailable' } },
+        503,
       );
     }
     if (result.reason === 'provider_not_configured') {
@@ -270,6 +275,13 @@ v1.post('/chat/completions', async (c) => {
             code: 'provider_not_configured',
           },
         },
+        503,
+      );
+    }
+    if (result.reason === 'provider_unavailable') {
+      c.header('Retry-After', String(retryAfterSeconds(result.retryAfterMs)));
+      return c.json(
+        { error: { message: 'provider unavailable', type: 'server_error', code: 'provider_unavailable' } },
         503,
       );
     }
@@ -469,12 +481,11 @@ v1.post('/chat/completions', async (c) => {
     });
   }
 
-  // 3b. Non-streaming: sanitize the body, settle, forward.
-  const text = await upstream.text();
-  const sanitized = sanitizeCompletionBody(text, body.model);
-  if (!sanitized.ok) {
-    // 2xx with an unusable body: count the served provider, refund, never echo upstream text.
-    await recordFailure(result.route.providerId, result.route.providerModelId);
+  // 3b. Non-streaming: the shared loop already read and validated/sanitized the body,
+  // so the served route made it through `invalid_body` failover before we got here.
+  const sanitized = result.sanitized;
+  if (!sanitized) {
+    // Defensive: a non-stream success must always carry a sanitized body.
     await result.finalize({
       promptTokens: result.promptTokens,
       completionTokens: 0,
@@ -483,7 +494,10 @@ v1.post('/chat/completions', async (c) => {
       errorType: 'invalid_upstream_response',
       streamed: false,
     });
-    return c.json(GENERIC_ERROR_PAYLOAD, 502);
+    return c.json(
+      { error: { message: 'upstream provider error', type: 'server_error', code: 'provider_error' } },
+      502,
+    );
   }
 
   const usage = (sanitized.json as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;

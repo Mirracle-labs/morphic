@@ -39,6 +39,10 @@ const totalTimeoutMs = () => {
   const value = Number(process.env.ANTHROPIC_TOTAL_TIMEOUT_MS ?? 180_000);
   return Number.isFinite(value) && value > 0 ? value : 180_000;
 };
+const ttfbTimeoutMs = () => {
+  const value = Number(process.env.ANTHROPIC_TTFB_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(value) && value > 0 ? value : 30_000;
+};
 
 if (process.env.ANTHROPIC_ENABLED === 'true' && !defaultModel()) {
   console.warn('[anthropic] ANTHROPIC_DEFAULT_MODEL is unset; /v1/messages will return 503');
@@ -70,10 +74,14 @@ function fail(c: Context, status: ContentfulStatusCode, type: AnthropicErrorType
   return c.json(anthropicError(type, message), status);
 }
 
-function refusalStatus(reason: 'model_not_found' | 'provider_not_configured' | 'insufficient_credits') {
+function refusalStatus(
+  reason: 'model_not_found' | 'routing_unavailable' | 'provider_not_configured' | 'provider_unavailable' | 'insufficient_credits',
+) {
   switch (reason) {
     case 'model_not_found':
       return { status: 404 as const, type: 'not_found_error' as const, message: 'model not found' };
+    case 'routing_unavailable':
+    case 'provider_unavailable':
     case 'provider_not_configured':
       return { status: 503 as const, type: 'api_error' as const, message: 'provider not configured' };
     default:
@@ -162,9 +170,17 @@ anthropic.post('/messages', async (c) => {
       wantsStream,
       signal: c.req.raw.signal,
       totalTimeoutMs: totalTimeoutMs(),
+      ttfbTimeoutMs: ttfbTimeoutMs(),
       prepareBody: (route) => translateAnthropicRequest(request, { maxTokens: route.contextLength }),
-      onRoute: (route) => {
-        if (route.deprecationWarning) c.header('X-Morphic-Warning', route.deprecationWarning);
+      onPlan: (plan) => {
+        if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
+      },
+      // A 2xx that cannot become an Anthropic message is an `invalid_body` attempt
+      // (countable and failable-over), not a billed success.
+      validateNonStreamBody: (json) => {
+        if (!Array.isArray(json.choices) || json.choices.length === 0) {
+          throw new Error('upstream completion has no choices');
+        }
       },
     });
 
@@ -240,11 +256,9 @@ anthropic.post('/messages', async (c) => {
       });
     }
 
-    const text = await result.upstream.text();
-    let upstream: unknown;
-    try {
-      upstream = JSON.parse(text);
-    } catch {
+    // Non-stream: the shared loop already read, validated and sanitized the body.
+    const upstream = result.sanitized?.json;
+    if (!upstream) {
       await result.finalize({
         promptTokens: result.promptTokens,
         completionTokens: 0,
