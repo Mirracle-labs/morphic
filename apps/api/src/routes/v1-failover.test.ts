@@ -245,6 +245,16 @@ async function reservationsFor(userId: string) {
   return db.select().from(s.reservations).where(eq(s.reservations.userId, userId));
 }
 
+async function requestLogFor(userId: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await db.select().from(s.requestLogs).where(eq(s.requestLogs.userId, userId));
+    if (rows.length > 0) return rows[0]!;
+    await delay(100);
+  }
+  throw new Error('request log was not written');
+}
+
 async function withUpstream<T>(upstream: MockUpstream, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -766,4 +776,139 @@ test('1E: a snapshot that never loaded returns 503 routing_unavailable', async (
   assert.equal(res.status, 503);
   assert.equal((await res.json()).error.code, 'routing_unavailable');
   assert.equal((await reservationsFor(user.id)).length, 0);
+});
+
+// ── Pooling 1F: observability ───────────────────────────────────────────────
+
+test('1F: a failover request logs served provider, attempts, reasons, latencies and metrics', async () => {
+  const hits: string[] = [];
+  const upstream = await startRoutedUpstream({ p: '500', f: 'ok' }, hits);
+  const store = createSpyStore();
+  setCircuitStoreForTests(store);
+
+  const primary = await mkProvider(`${upstream.baseUrl}/p`);
+  const fallback = await mkProvider(`${upstream.baseUrl}/f`);
+  const model = await mkModel(primary.id, { fallbackProviderId: fallback.id });
+  const { user, rawKey } = await mkUser();
+
+  const captured: Array<{ args: unknown[] }> = [];
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  console.info = (...args: unknown[]) => {
+    captured.push({ args });
+    originalInfo(...args);
+  };
+  console.warn = (...args: unknown[]) => {
+    captured.push({ args });
+    originalWarn(...args);
+  };
+
+  try {
+    await withUpstream(upstream, async () => {
+      const res = await chat(rawKey, { model: model.publicModelId, messages: userMsg });
+      assert.equal(res.status, 200);
+      const text = JSON.stringify(await res.json());
+      for (const field of ['servedProviderId', 'servedProviderModelId', 'attemptLatenciesMs', 'failoverReasons']) {
+        assert.equal(text.includes(field), false, `${field} must never reach the client`);
+      }
+    });
+  } finally {
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  }
+
+  const log = await requestLogFor(user.id);
+  assert.equal(log.servedProviderId, fallback.id);
+  assert.equal(log.servedProviderModelId, model.providerModelId);
+  assert.equal(log.attempts, 2);
+  assert.deepEqual(log.failoverReasons, ['http_500']);
+  assert.equal(log.attemptLatenciesMs?.length, 2);
+  assert.ok(log.attemptLatenciesMs?.every((ms) => typeof ms === 'number' && ms >= 0));
+
+  const completion = captured.find((c) => c.args[0] === '[metrics] completion');
+  assert.ok(completion, 'a per-request completion metric line is emitted');
+  const completionFields = completion.args[1] as Record<string, unknown>;
+  assert.equal(completionFields.model, model.publicModelId);
+  assert.equal(completionFields.failover, true);
+  assert.equal(completionFields.attempts, 2);
+
+  const failoverMetric = captured.find((c) => c.args[0] === '[metrics] failover');
+  assert.ok(failoverMetric, 'a failover metric line is emitted');
+  assert.deepEqual((failoverMetric.args[1] as Record<string, unknown>).reasons, ['http_500']);
+
+  assert.ok(
+    captured.some((c) => c.args[0] === '[metrics] circuit_open'),
+    'opening a circuit emits a metric line',
+  );
+});
+
+test('1F: a single-attempt request has sensible observability defaults', async () => {
+  const hits: string[] = [];
+  const upstream = await startRoutedUpstream({ p: 'ok' }, hits);
+  const provider = await mkProvider(`${upstream.baseUrl}/p`);
+  const model = await mkModel(provider.id);
+  const { user, rawKey } = await mkUser();
+
+  await withUpstream(upstream, async () => {
+    const res = await chat(rawKey, { model: model.publicModelId, messages: userMsg });
+    assert.equal(res.status, 200);
+    await res.text();
+  });
+
+  const log = await requestLogFor(user.id);
+  assert.equal(log.servedProviderId, provider.id);
+  assert.equal(log.servedProviderModelId, model.providerModelId);
+  assert.equal(log.attempts, 1);
+  assert.deepEqual(log.failoverReasons, []);
+  assert.equal(log.attemptLatenciesMs?.length, 1);
+});
+
+const alertRows: Array<{ status: number; alerts: number }> = [
+  { status: 401, alerts: 1 },
+  { status: 402, alerts: 1 },
+  { status: 403, alerts: 1 },
+  { status: 404, alerts: 1 },
+  { status: 400, alerts: 0 },
+  { status: 429, alerts: 0 },
+  { status: 500, alerts: 0 },
+];
+
+test('1F: the provider alert seam fires only on 401/402/403/404', async () => {
+  // One fixture for every status: the mock returns the status carried in the body,
+  // and each iteration gets a fresh in-memory circuit store.
+  const upstream = await startMockUpstream(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const status = Number((JSON.parse(raw || '{}') as { test_status?: number }).test_status ?? 500);
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'mock upstream' }));
+  });
+  const provider = await mkProvider(upstream.baseUrl);
+  const model = await mkModel(provider.id);
+  const { user, apiKeyId } = await mkUser();
+
+  try {
+    for (const row of alertRows) {
+      setCircuitStoreForTests(createSpyStore());
+      const alerts: ProviderAlertEvent[] = [];
+      const result = await startCompletion({
+        auth: { requestId: `p1f-alert-${uid()}`, userId: user.id, apiKeyId },
+        publicModelId: model.publicModelId,
+        body: { model: model.publicModelId, messages: userMsg, test_status: row.status },
+        wantsStream: false,
+        onProviderAlert: (event) => {
+          alerts.push(event);
+        },
+      });
+
+      assert.equal(result.kind, 'failure', `status ${row.status} must be a failure`);
+      assert.equal(alerts.length, row.alerts, `status ${row.status} alert count`);
+      if (row.alerts > 0) {
+        assert.equal(alerts[0]?.providerId, provider.id);
+        assert.equal(alerts[0]?.upstreamStatus, row.status);
+      }
+    }
+  } finally {
+    await upstream.close();
+  }
 });

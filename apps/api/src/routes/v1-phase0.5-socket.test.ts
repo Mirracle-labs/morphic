@@ -180,20 +180,45 @@ test('0.5 socket: client disconnect after the first content chunk bills partial'
   const before = await getBalance(user.id);
   const port = await gatewayPort();
 
-  await withUpstream(upstream, () =>
-    streamAndMaybeAbort({
-      port,
-      key: rawKey,
-      body: { model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] },
-      destroyWhen: (chunk) => chunk.includes('hello-1'),
-    }),
-  );
+  // Pooling 1F: the partial/disconnect metric is emitted on the existing log channel.
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+    originalWarn(...args);
+  };
 
-  const row = await usageRow(user.id);
-  assert.equal(row.status, 'partial');
-  assert.ok(row.creditsConsumed > 0, 'delivered content must be charged');
-  assert.ok(row.completionTokens > 0);
-  assert.equal(await getBalance(user.id), before - row.creditsConsumed, 'uncharged reservation must be refunded');
+  try {
+    await withUpstream(upstream, () =>
+      streamAndMaybeAbort({
+        port,
+        key: rawKey,
+        body: { model: model.publicModelId, stream: true, messages: [{ role: 'user', content: 'hi' }] },
+        destroyWhen: (chunk) => chunk.includes('hello-1'),
+      }),
+    );
+
+    const row = await usageRow(user.id);
+    assert.equal(row.status, 'partial');
+    assert.ok(row.creditsConsumed > 0, 'delivered content must be charged');
+    assert.ok(row.completionTokens > 0);
+    assert.equal(await getBalance(user.id), before - row.creditsConsumed, 'uncharged reservation must be refunded');
+
+    // The metric is written right after the asynchronous settle/log path.
+    const deadline = Date.now() + 3000;
+    while (
+      Date.now() < deadline &&
+      !warnings.some((args) => args[0] === '[metrics] client_disconnected_partial')
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(
+      warnings.some((args) => args[0] === '[metrics] client_disconnected_partial'),
+      'a client_disconnected partial metric line is emitted',
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test('0.5 socket: client disconnect right after headers bills prompt tokens only', async () => {
