@@ -178,7 +178,7 @@ Live E2E through the local gateway + ZenMux (temporary DB rows, removed after; o
 
 ## 7.1 Phase 2 implementation notes
 
-**State:** complete and merged to `main` (2026-10-21). The original merge-order deviation from AGENTS.md §5 (Phase 1/2 before Pooling 0/0.5) is resolved; the pooled route plan and shared failover loop are now in `main`.
+**State:** complete (2026-10-21) and consolidated on `feature/api-implementation` (2026-10-22). The original merge-order deviation from AGENTS.md §5 (Phase 1/2 before Pooling 0/0.5) is resolved; the pooled route plan and shared failover loop are now on the feature branch.
 
 Shipped files:
 
@@ -223,7 +223,7 @@ Rollback: `ANTHROPIC_ENABLED=false` (route unmounts) or revert the Phase 2 PR. B
 
 ## 7.2 Pooling Phase 0 / 0.5 / 1A–1F
 
-**State:** complete and merged to `main` (2026-10-21). Phase 1G is intentionally deferred until 1E has run in production with `POOL_ENABLED=true` and no incidents.
+**State:** complete (2026-10-21) and consolidated on `feature/api-implementation` (2026-10-22). Phase 1G is intentionally deferred until 1E has run in production with `POOL_ENABLED=true` and no incidents.
 
 Shipped:
 
@@ -256,7 +256,7 @@ Rollback: `POOL_ENABLED=false` returns to legacy candidates immediately. Revert 
 
 ## 7.3 Phase 3 implementation notes
 
-**State:** complete in the working tree (2026-10-22); commit/merge pending.
+**State:** complete and committed on `feature/api-implementation` (2026-10-22). `main` remains `origin/main`.
 
 Phase 3 was largely delivered by Pooling 1E: `routes/anthropic.ts` already called the shared `startCompletion` loop, which builds `createRoutePlan` and iterates `plan.next()`. This phase audited that path and closed the remaining gaps.
 
@@ -313,7 +313,7 @@ Do not point `DATABASE_URL` in `.env.test` at production; `test-guard` will reje
 
 ## 9. Handoff — start here for Phase 4
 
-**State:** Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22). Phase 3 is complete in the working tree; commit/merge is pending. Phase 4 is next. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
+**State:** Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22) on `feature/api-implementation`. `main` remains `origin/main`. Phase 4 is next. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
 
 Phase 2 modified files (already merged):
 
@@ -333,7 +333,7 @@ Phase 2 new files (already merged):
 - `apps/api/src/routes/anthropic.ts` + `anthropic.test.ts`
 - `packages/shared/src/anthropic.ts`
 
-Phase 3 changed files (working tree, pending commit):
+Phase 3 changed files (committed on `feature/api-implementation`):
 
 - `apps/api/src/routes/anthropic.ts` (modified — stream finalize, partial billing, `Retry-After`)
 - `apps/api/src/routes/anthropic-failover.test.ts` (new — 7 tests)

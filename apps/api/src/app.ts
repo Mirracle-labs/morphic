@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import { v1 } from './routes/v1';
@@ -15,6 +16,11 @@ import { getTrustedClientIp, isLoopbackIp } from './lib/ip';
 import { checkRateLimit } from './ratelimit';
 
 const app = new Hono();
+
+// Development request logger
+if (process.env.NODE_ENV === 'development') {
+  app.use('*', logger());
+}
 
 // Loose per-IP flood guard for the webhook surface only. PayPal retries in bursts after an
 // outage, so this sits well above any legitimate delivery rate — it exists to stop a hostile
