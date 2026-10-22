@@ -7,6 +7,7 @@ import { estimatePromptTokens } from '@morphic/shared/credits';
 import { startCompletion } from '../domain/completion';
 import { logRequest } from '../middleware/logger';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
+import { appFromRequest } from '../lib/app-attribution';
 import { normalizeRequest } from '../domain/normalize';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
 
@@ -232,7 +233,7 @@ v1.post('/chat/completions', async (c) => {
 
   const wantsStream = body.stream === true;
   const result = await startCompletion({
-    auth: { requestId, userId, apiKeyId: keyId },
+    auth: { requestId, userId, apiKeyId: keyId, app: appFromRequest(c.req.raw.headers) },
     publicModelId: body.model,
     body: body as unknown as Record<string, unknown>,
     wantsStream,

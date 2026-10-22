@@ -44,6 +44,7 @@ export default async function AdminPackages() {
     id: pkg.id,
     name: pkg.name,
     description: pkg.description,
+    kind: pkg.kind,
     creditAllowance: pkg.creditAllowance,
     modelId: pkg.modelId,
     durationHours: pkg.durationHours,

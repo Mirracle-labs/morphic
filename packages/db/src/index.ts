@@ -49,6 +49,12 @@ function isNeonConnection(): boolean {
   }
 }
 
+// Reused TLS sockets to Neon's HTTP endpoint. Node's default agent drops idle sockets after 5s,
+// so every page opened after a short pause paid a fresh TCP + TLS handshake per parallel query
+// (about 2.6s for six queries from Indonesia vs 0.3s warm). Neon keeps idle sockets open for at
+// least 2 minutes; a socket it closes first fails fast and resilientFetch retries on a new one.
+const neonAgent = new https.Agent({ keepAlive: true, maxSockets: 32, timeout: 120_000 });
+
 function nativeIPv4Fetch(urlInput: string | URL | Request, init?: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     try {
@@ -81,6 +87,7 @@ function nativeIPv4Fetch(urlInput: string | URL | Request, init?: RequestInit): 
         {
           method: init?.method || 'GET',
           headers,
+          agent: u.protocol === 'https:' ? neonAgent : undefined,
           family: 4, // 100% FORCE IPv4 Socket at OS level
           timeout: 15000,
         },

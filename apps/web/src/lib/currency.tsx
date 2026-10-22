@@ -32,6 +32,7 @@ export function CurrencyProvider({
       const saved = localStorage.getItem('morphic_currency') as Currency | null;
       if (saved === 'IDR' || saved === 'USD') {
         if (saved !== initialCurrency) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only readable after mount
           setCurrencyState(saved);
         }
         document.cookie = `morphic_currency=${saved}; path=/; max-age=31536000; SameSite=Lax`;

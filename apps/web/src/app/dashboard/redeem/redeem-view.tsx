@@ -321,7 +321,7 @@ export function RedeemView({
                   type="button"
                   onClick={() => setStateFilter(value)}
                   aria-pressed={stateFilter === value}
-                  className={`h-8 px-3 rounded-md text-sm transition-colors cursor-pointer ${focusRing} ${
+                  className={`h-8 px-3 rounded-md text-sm pointer-coarse:min-h-11 transition-colors cursor-pointer ${focusRing} ${
                     stateFilter === value ? 'bg-white text-neutral-950 font-semibold shadow-xs' : 'text-neutral-600 hover:text-neutral-950'
                   }`}
                 >

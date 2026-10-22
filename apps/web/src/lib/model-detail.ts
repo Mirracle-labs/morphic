@@ -106,7 +106,8 @@ export async function loadModelDetail(publicModelId: string): Promise<(ModelDeta
       .select({
         day: sql<string>`to_char(${s.requestLogs.createdAt} at time zone 'Asia/Jakarta', 'YYYY-MM-DD')`,
         provider: sql<string>`coalesce(${s.requestLogs.providerName}, 'unknown')`,
-        tokens: sql<number>`coalesce(sum(coalesce(${s.requestLogs.promptTokens},0) + coalesce(${s.requestLogs.completionTokens},0)),0)::bigint`,
+        // Tokens only count when a request succeeded; a failed call processed nothing.
+        tokens: sql<number>`coalesce(sum(coalesce(${s.requestLogs.promptTokens},0) + coalesce(${s.requestLogs.completionTokens},0)) filter (where ${s.requestLogs.status} = 'success'),0)::bigint`,
         requests: sql<number>`count(*)::int`,
       })
       .from(s.requestLogs)
@@ -117,7 +118,7 @@ export async function loadModelDetail(publicModelId: string): Promise<(ModelDeta
         publicModelId: s.models.publicModelId,
         displayName: s.models.displayName,
         description: s.models.description,
-        tokens7d: sql<number>`(select coalesce(sum(coalesce(prompt_tokens,0) + coalesce(completion_tokens,0)),0) from request_logs rl where rl.resolved_model_id = ${s.models.id} and rl.created_at > now() - interval '7 days')::bigint`,
+        tokens7d: sql<number>`(select coalesce(sum(coalesce(prompt_tokens,0) + coalesce(completion_tokens,0)),0) from request_logs rl where rl.resolved_model_id = ${s.models.id} and rl.status = 'success' and rl.created_at > now() - interval '7 days')::bigint`,
       })
       .from(s.models)
       .where(and(eq(s.models.status, 'active'), ne(s.models.id, row.id))),

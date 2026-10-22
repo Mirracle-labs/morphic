@@ -1,8 +1,10 @@
-import { eq, desc, and, gt, sql } from 'drizzle-orm';
+import { eq, asc, desc, and, gt, inArray, sql } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
 import { requireUser } from '@/lib/actions';
 import { getBalance } from '@morphic/db/billing';
 import { BillingView } from './billing-view';
+
+const SHOWCASE_MODELS = ['openai/gpt-6-luna', 'deepseek/deepseek-v4.1-flash', 'anthropic/claude-haiku-5.5', 'anthropic/claude-sonnet-5.5'];
 
 export default async function BillingPage(props: {
   searchParams?: Promise<{ tab?: string }>;
@@ -18,7 +20,7 @@ export default async function BillingPage(props: {
   // matching endpoints run exactly these queries against the same rows, so each one cost an
   // HTTPS round trip to another region for data this process can already reach. The gateway
   // still owns every write (minting keys, redeeming codes, creating payments).
-  const [balance, packages, entitlements, payments, ledger] = await Promise.all([
+  const [balance, packages, entitlements, payments, ledger, showcase] = await Promise.all([
     getBalance(user.id).catch((err) => {
       console.warn('[BillingPage] Balance read failed:', err);
       return 0;
@@ -27,6 +29,7 @@ export default async function BillingPage(props: {
       .select({
         id: s.packages.id,
         name: s.packages.name,
+        kind: s.packages.kind,
         description: s.packages.description,
         creditAllowance: s.packages.creditAllowance,
         modelId: s.packages.modelId,
@@ -40,6 +43,7 @@ export default async function BillingPage(props: {
       .from(s.packages)
       .leftJoin(s.models, eq(s.packages.modelId, s.models.id))
       .where(eq(s.packages.status, 'active'))
+      .orderBy(asc(s.packages.priceCents))
       .catch((err) => {
         console.warn('[BillingPage] Package catalogue read failed:', err);
         return [] as any[];
@@ -49,6 +53,8 @@ export default async function BillingPage(props: {
         id: s.entitlements.id,
         allowance: s.entitlements.allowance,
         remaining: s.entitlements.remaining,
+        unlimited: s.entitlements.unlimited,
+        resetsAt: s.entitlements.resetsAt,
         expiresAt: s.entitlements.expiresAt,
         packageName: s.packages.name,
         displayName: s.models.displayName,
@@ -100,6 +106,13 @@ export default async function BillingPage(props: {
         console.warn('[BillingPage] Credit ledger read failed:', err);
         return [] as any[];
       }),
+    // Real multipliers for the "how far do 10M tokens go" strip, cheap to expensive.
+    db
+      .select({ id: s.models.publicModelId, name: s.models.displayName, out: s.models.outputCreditsPer1m })
+      .from(s.models)
+      .where(and(inArray(s.models.publicModelId, SHOWCASE_MODELS), eq(s.models.status, 'active')))
+      .orderBy(asc(s.models.outputCreditsPer1m))
+      .catch(() => [] as { id: string; name: string; out: number }[]),
   ]);
 
   return (
@@ -109,6 +122,7 @@ export default async function BillingPage(props: {
       entitlements={entitlements}
       payments={payments}
       ledger={ledger}
+      showcase={showcase}
       initialTab={initialTab}
     />
   );
