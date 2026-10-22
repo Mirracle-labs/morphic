@@ -1,7 +1,15 @@
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AnthropicMessagesRequest } from '@morphic/shared/anthropic';
 import { translateAnthropicRequest, sanitizeToolId } from './request';
+import {
+  clearReasoningEchoCache,
+  rememberReasoningEcho,
+} from './reasoning-cache';
+
+afterEach(() => {
+  clearReasoningEchoCache();
+});
 
 const base = (overrides: Partial<AnthropicMessagesRequest> = {}): AnthropicMessagesRequest => ({
   model: 'claude-test',
@@ -215,6 +223,80 @@ test('request: assistant tool_calls without results get a synthetic result', () 
   const messages = body.messages as OpenAiMessage[];
   assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant', 'tool']);
   assert.equal(messages[2]!.content, 'error: tool result missing');
+});
+
+test('request: tool_choice any is downgraded to auto only when required is unsupported', () => {
+  const tools = [{ name: 'calc', input_schema: { type: 'object', properties: {} } }];
+  const request = base({ tools, tool_choice: { type: 'any' } });
+
+  assert.equal(translateAnthropicRequest(request).tool_choice, 'required');
+  assert.equal(
+    translateAnthropicRequest(request, { toolChoiceRequiredSupported: true }).tool_choice,
+    'required',
+  );
+  assert.equal(
+    translateAnthropicRequest(request, { toolChoiceRequiredSupported: false }).tool_choice,
+    'auto',
+  );
+
+  // The downgrade is scoped to `required`; an explicit tool name is untouched.
+  const named = base({ tools, tool_choice: { type: 'tool', name: 'calc' } });
+  assert.deepEqual(
+    translateAnthropicRequest(named, { toolChoiceRequiredSupported: false }).tool_choice,
+    { type: 'function', function: { name: 'calc' } },
+  );
+});
+
+test('request: cached reasoning is injected only when the entry requires echo', () => {
+  rememberReasoningEcho(['call_1'], 'I should call calc.');
+  const request = base({
+    messages: [
+      { role: 'user', content: '2+2?' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'calc', input: { x: 2 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: '4' }] },
+    ],
+  });
+
+  const withEcho = translateAnthropicRequest(request, { reasoningEcho: true });
+  const echoed = withEcho.messages as OpenAiMessage[];
+  assert.equal(echoed[1]!.role, 'assistant');
+  assert.equal(
+    (echoed[1] as OpenAiMessage & { reasoning_content?: string }).reasoning_content,
+    'I should call calc.',
+  );
+
+  const withoutEcho = translateAnthropicRequest(request, { reasoningEcho: false });
+  const plain = withoutEcho.messages as OpenAiMessage[];
+  assert.equal('reasoning_content' in plain[1]!, false);
+});
+
+test('request: reasoning is not injected for a different tool id or a plain assistant turn', () => {
+  rememberReasoningEcho(['call_1'], 'I should call calc.');
+  const different = translateAnthropicRequest(
+    base({
+      messages: [
+        { role: 'user', content: '2+2?' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_2', name: 'calc', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_2', content: '4' }] },
+      ],
+    }),
+    { reasoningEcho: true },
+  );
+  assert.equal('reasoning_content' in (different.messages as OpenAiMessage[])[1]!, false);
+
+  const plain = translateAnthropicRequest(
+    base({
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+        { role: 'user', content: 'again' },
+      ],
+    }),
+    { reasoningEcho: true },
+  );
+  for (const message of plain.messages as OpenAiMessage[]) {
+    assert.equal('reasoning_content' in message, false);
+  }
 });
 
 test('sanitizeToolId: keeps safe ids, replaces the rest, and never returns empty', () => {
