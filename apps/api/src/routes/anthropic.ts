@@ -15,7 +15,12 @@ import {
 } from '@morphic/shared/anthropic';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { appFromRequest } from '../lib/app-attribution';
-import { buildPromptText, startCompletion, type CompletionFailure } from '../domain/completion';
+import {
+  buildPromptText,
+  retryAfterSeconds,
+  startCompletion,
+  type CompletionFailure,
+} from '../domain/completion';
 import { translateAnthropicRequest } from '../domain/anthropic/request';
 import { translateAnthropicResponse } from '../domain/anthropic/response';
 import { createAnthropicStreamTranslator } from '../domain/anthropic/stream';
@@ -39,6 +44,10 @@ const defaultModel = () => process.env.ANTHROPIC_DEFAULT_MODEL?.trim();
 const totalTimeoutMs = () => {
   const value = Number(process.env.ANTHROPIC_TOTAL_TIMEOUT_MS ?? 180_000);
   return Number.isFinite(value) && value > 0 ? value : 180_000;
+};
+const ttfbTimeoutMs = () => {
+  const value = Number(process.env.ANTHROPIC_TTFB_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(value) && value > 0 ? value : 30_000;
 };
 
 if (process.env.ANTHROPIC_ENABLED === 'true' && !defaultModel()) {
@@ -71,10 +80,15 @@ function fail(c: Context, status: ContentfulStatusCode, type: AnthropicErrorType
   return c.json(anthropicError(type, message), status);
 }
 
-function refusalStatus(reason: 'model_not_found' | 'provider_not_configured' | 'insufficient_credits') {
+function refusalStatus(
+  reason: 'model_not_found' | 'routing_unavailable' | 'provider_not_configured' | 'provider_unavailable' | 'insufficient_credits',
+) {
   switch (reason) {
     case 'model_not_found':
       return { status: 404 as const, type: 'not_found_error' as const, message: 'model not found' };
+    case 'provider_unavailable':
+      return { status: 503 as const, type: 'api_error' as const, message: 'provider unavailable' };
+    case 'routing_unavailable':
     case 'provider_not_configured':
       return { status: 503 as const, type: 'api_error' as const, message: 'provider not configured' };
     default:
@@ -163,13 +177,25 @@ anthropic.post('/messages', async (c) => {
       wantsStream,
       signal: c.req.raw.signal,
       totalTimeoutMs: totalTimeoutMs(),
+      ttfbTimeoutMs: ttfbTimeoutMs(),
       prepareBody: (route) => translateAnthropicRequest(request, { maxTokens: route.contextLength }),
-      onRoute: (route) => {
-        if (route.deprecationWarning) c.header('X-Morphic-Warning', route.deprecationWarning);
+      onPlan: (plan) => {
+        if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
+      },
+      // A 2xx that cannot become an Anthropic message is an `invalid_body` attempt
+      // (countable and failable-over), not a billed success.
+      validateNonStreamBody: (json) => {
+        if (!Array.isArray(json.choices) || json.choices.length === 0) {
+          throw new Error('upstream completion has no choices');
+        }
       },
     });
 
     if (result.kind === 'refusal') {
+      // Mirror v1: an all-circuits-open refusal is retryable and carries Retry-After.
+      if (result.reason === 'provider_unavailable') {
+        c.header('Retry-After', String(retryAfterSeconds(result.retryAfterMs)));
+      }
       const mapped = refusalStatus(result.reason);
       return fail(c, mapped.status as ContentfulStatusCode, mapped.type, mapped.message);
     }
@@ -187,65 +213,135 @@ anthropic.post('/messages', async (c) => {
         const reader = result.upstream.body!.getReader();
         const decoder = new TextDecoder();
         let atLineBoundary = true;
+        // Two independent failure sources (Pooling 0.5, wired here in Protocol Phase 3):
+        // the client-facing writer and the upstream reader. A disconnect after headers
+        // is chargeable (`partial`); an upstream break follows D8's env flag.
+        let clientGone = false;
+        let upstreamBroke = false;
+        let upstreamErrorPayload = false;
+        if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+        stream.onAbort(() => {
+          clientGone = true;
+        });
         const heartbeat = startHeartbeat(
           () => {
-            void stream.write(': ping\n\n');
+            if (!clientGone) void stream.write(': ping\n\n');
           },
           heartbeatMs(),
-          () => !translator.done && atLineBoundary,
+          () => !translator.done && atLineBoundary && !clientGone,
         );
         const write = async (text: string) => {
-          if (!text) return;
+          if (!text || clientGone) return;
           atLineBoundary = text.endsWith('\n');
-          await stream.write(text);
+          try {
+            await stream.write(text);
+          } catch {
+            clientGone = true;
+          }
+          if (stream.aborted) clientGone = true;
           heartbeat.touch();
         };
-        let failed = false;
 
         try {
           await write(translator.start());
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunkText = decoder.decode(value, { stream: true });
-            const output = translator.push(chunkText);
-            if (translator.state.failed) throw new Error('upstream stream error');
+          while (!clientGone) {
+            // A disconnect can land between reads; do not wait for the next failing read.
+            if (c.req.raw.signal.aborted || stream.aborted) {
+              clientGone = true;
+              break;
+            }
+            let read: ReadableStreamReadResult<Uint8Array>;
+            try {
+              read = await reader.read();
+            } catch {
+              // An aborted upstream fetch is usually the client's abort racing through
+              // AbortSignal.any; distinguish it from an upstream that actually broke.
+              if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+              else upstreamBroke = true;
+              break;
+            }
+            if (read.done) break;
+            const output = translator.push(decoder.decode(read.value, { stream: true }));
+            if (translator.state.failed) {
+              upstreamErrorPayload = true;
+              break;
+            }
             await write(output);
           }
-          const rest = decoder.decode();
-          if (rest) {
-            const output = translator.push(rest);
-            if (translator.state.failed) throw new Error('upstream stream error');
-            await write(output);
+
+          if (clientGone) {
+            // Stop paying the upstream for tokens nobody will read; still settle afterwards.
+            await reader.cancel().catch(() => {});
+          } else if (upstreamBroke) {
+            // A socket that died mid-stream never reaches a valid message_stop.
+            await write(translator.fail());
+          } else if (upstreamErrorPayload) {
+            // Sanitized Anthropic error event; never forward upstream text or [DONE].
+            await write(translator.fail());
+          } else {
+            const rest = decoder.decode();
+            if (rest) {
+              const output = translator.push(rest);
+              upstreamErrorPayload = translator.state.failed;
+              if (!upstreamErrorPayload) await write(output);
+            }
+            if (upstreamErrorPayload) {
+              await write(translator.fail());
+            } else {
+              await write(translator.flush());
+              const estimated = estimatePromptTokens(translator.state.outputText);
+              await write(translator.finish(estimated));
+            }
           }
-          await write(translator.flush());
-          const estimated = estimatePromptTokens(translator.state.outputText);
-          await write(translator.finish(estimated));
         } catch {
-          failed = true;
-          // Sanitized error event; never forward upstream text or [DONE].
-          await stream.write(translator.fail());
+          // Unexpected failure outside read/write (translator/decoder): upstream break.
+          if (!clientGone && !translator.done) {
+            upstreamBroke = true;
+            // Sanitized error event; never forward upstream text or [DONE].
+            await write(translator.fail());
+          }
         } finally {
           heartbeat.stop();
         }
 
         const usage = translator.state.usage;
+        const completionTokens =
+          usage?.completion_tokens ?? estimatePromptTokens(translator.state.outputText);
+
+        // D8: a disconnect after upstream headers is chargeable (`partial`, even with
+        // zero output). An upstream break is chargeable only once tokens were delivered,
+        // unless the operator opted into refunding those breaks.
+        let status: 'success' | 'error' | 'partial';
+        let streamErrorType: string | null = null;
+        if (clientGone) {
+          status = 'partial';
+          streamErrorType = 'client_disconnected';
+        } else if (upstreamErrorPayload) {
+          status = 'error';
+          streamErrorType = 'invalid_upstream_response';
+        } else if (upstreamBroke) {
+          const chargePartial =
+            completionTokens > 0 && process.env.PARTIAL_BILLING_UPSTREAM_BREAK !== 'refund';
+          status = chargePartial ? 'partial' : 'error';
+          streamErrorType = 'stream_disconnected';
+        } else {
+          status = 'success';
+        }
+
         await result.finalize({
           promptTokens: usage?.prompt_tokens ?? result.promptTokens,
-          completionTokens: usage?.completion_tokens ?? estimatePromptTokens(translator.state.outputText),
+          completionTokens,
           latencyMs: Date.now() - startedAt,
-          status: failed ? 'error' : 'success',
-          errorType: failed ? 'stream_disconnected' : null,
+          status,
+          errorType: streamErrorType,
           streamed: true,
         });
       });
     }
 
-    const text = await result.upstream.text();
-    let upstream: unknown;
-    try {
-      upstream = JSON.parse(text);
-    } catch {
+    // Non-stream: the shared loop already read, validated and sanitized the body.
+    const upstream = result.sanitized?.json;
+    if (!upstream) {
       await result.finalize({
         promptTokens: result.promptTokens,
         completionTokens: 0,

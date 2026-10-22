@@ -1,6 +1,7 @@
 import { db, schema as s } from '@morphic/db';
 import { gte, sql } from 'drizzle-orm';
 import { rateLimitStore } from '../ratelimit';
+import { redis } from './redis';
 
 export interface ProviderHealth {
   providerName: string;
@@ -163,6 +164,92 @@ export async function alertNegativeMargin(model: string, revenueCredits: number,
     });
   } catch (e) {
     console.error('[alert] negative margin alert failed:', e);
+  }
+}
+
+/** Provider auth/not-found problem: 401/402/403/404 from an upstream. */
+export interface ProviderProblemAlert {
+  providerId: string;
+  providerName: string;
+  status: number;
+  code?: string;
+  requestId?: string;
+}
+
+/** Narrow Redis surface used by the cooldown; injectable for tests. */
+interface ProviderAlertCooldownStore {
+  set(key: string, value: string, mode: 'PX', ttlMs: number, nx: 'NX'): Promise<'OK' | null>;
+}
+
+export interface AlertProviderProblemDeps {
+  redis?: ProviderAlertCooldownStore | null;
+  now?: () => number;
+}
+
+const PROVIDER_ALERT_STATUSES = new Set([401, 402, 403, 404]);
+const DEFAULT_PROVIDER_ALERT_COOLDOWN_MS = 600_000;
+// Fallback when Redis is unset or a command fails (per-process; same shape as the Redis key).
+const providerProblemCooldowns = new Map<string, number>();
+
+/**
+ * Alert on provider auth/credit/model problems (401/402/403/404), rate-limited per
+ * `(providerId, status)` with Redis `SET NX PX` and an in-memory fallback. Never throws:
+ * callers fire it without awaiting.
+ */
+export async function alertProviderProblem(
+  input: ProviderProblemAlert,
+  deps: AlertProviderProblemDeps = {},
+): Promise<void> {
+  try {
+    // Defensive: Appendix B only alerts on these statuses.
+    if (!PROVIDER_ALERT_STATUSES.has(input.status)) return;
+
+    const configured = Number(process.env.ALERT_PROVIDER_COOLDOWN_MS ?? DEFAULT_PROVIDER_ALERT_COOLDOWN_MS);
+    const cooldownMs = Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_PROVIDER_ALERT_COOLDOWN_MS;
+    const now = deps.now ? deps.now() : Date.now();
+    const key = `alert:provider:${input.providerId}:${input.status}`;
+    const client = deps.redis === undefined
+      ? (redis as unknown as ProviderAlertCooldownStore | null)
+      : deps.redis;
+
+    let claimed = false;
+    let redisHandled = false;
+    if (client) {
+      try {
+        claimed = (await client.set(key, '1', 'PX', cooldownMs, 'NX')) === 'OK';
+        redisHandled = true;
+      } catch (e) {
+        console.warn('[alert] provider cooldown Redis unavailable; using in-memory fallback:', e);
+      }
+    }
+
+    if (!redisHandled) {
+      const expiresAt = providerProblemCooldowns.get(key) ?? 0;
+      if (expiresAt > now) return;
+      providerProblemCooldowns.set(key, now + cooldownMs);
+      claimed = true;
+      if (providerProblemCooldowns.size > 1000) {
+        for (const [k, v] of providerProblemCooldowns) {
+          if (v <= now) providerProblemCooldowns.delete(k);
+        }
+      }
+    }
+
+    if (!claimed) return;
+
+    const suffix = input.code ? ` (${input.code})` : '';
+    await sendOpsAlert(`Provider ${input.providerName} returned HTTP ${input.status}${suffix}`, {
+      type: 'provider_problem',
+      providerId: input.providerId,
+      providerName: input.providerName,
+      status: input.status,
+      code: input.code ?? null,
+      requestId: input.requestId ?? null,
+    });
+  } catch (e) {
+    console.error('[alert] provider problem alert failed:', e);
   }
 }
 

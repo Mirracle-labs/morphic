@@ -4,12 +4,14 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { streamSSE } from 'hono/streaming';
 import { chatCompletionRequestSchema } from '@morphic/shared/types';
 import { estimatePromptTokens } from '@morphic/shared/credits';
-import { startCompletion } from '../domain/completion';
+import { startCompletion, retryAfterSeconds } from '../domain/completion';
 import { logRequest } from '../middleware/logger';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { appFromRequest } from '../lib/app-attribution';
 import { normalizeRequest } from '../domain/normalize';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
+import { createSseSanitizer } from '../lib/sse-sanitize';
+import { alertProviderProblem } from '../lib/alert';
 
 const v1 = new Hono();
 
@@ -142,8 +144,11 @@ v1.post('/chat/completions', async (c) => {
   const { keyId, userId } = c.get('apiKey');
 
   let parsed: ReturnType<typeof chatCompletionRequestSchema.safeParse>;
+  let rawBody: Record<string, unknown> | null = null;
   try {
-    parsed = chatCompletionRequestSchema.safeParse(await c.req.json());
+    const raw = await c.req.json();
+    rawBody = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    parsed = chatCompletionRequestSchema.safeParse(raw);
   } catch {
     logRequest({
       requestId,
@@ -152,6 +157,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: 'unknown',
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -174,6 +184,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: 'unknown',
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -205,6 +220,11 @@ v1.post('/chat/completions', async (c) => {
       modelAlias: body.model,
       resolvedModelId: null,
       providerName: null,
+      servedProviderId: null,
+      servedProviderModelId: null,
+      attempts: 0,
+      failoverReasons: [],
+      attemptLatenciesMs: [],
       promptTokens: null,
       completionTokens: null,
       creditsConsumed: null,
@@ -232,14 +252,32 @@ v1.post('/chat/completions', async (c) => {
   }
 
   const wantsStream = body.stream === true;
+  // Option A: read the client's value from the raw JSON so `packages/shared` stays
+  // untouched. The adapter still forces include_usage upstream for billing.
+  const streamOptions = rawBody?.stream_options;
+  const clientWantsUsage =
+    typeof streamOptions === 'object' &&
+    streamOptions !== null &&
+    (streamOptions as Record<string, unknown>).include_usage === true;
   const result = await startCompletion({
     auth: { requestId, userId, apiKeyId: keyId, app: appFromRequest(c.req.raw.headers) },
     publicModelId: body.model,
     body: body as unknown as Record<string, unknown>,
     wantsStream,
     signal: c.req.raw.signal,
-    onRoute: (route) => {
-      if (route.deprecationWarning) c.header('X-Morphic-Warning', route.deprecationWarning);
+    onPlan: (plan) => {
+      if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
+    },
+    onProviderAlert: (event) => {
+      // Appendix B alerts only on provider 401/402/403/404; transport kinds are ignored.
+      if (typeof event.upstreamStatus !== 'number') return;
+      void alertProviderProblem({
+        providerId: event.providerId,
+        providerName: event.providerName,
+        status: event.upstreamStatus,
+        code: event.code,
+        requestId: event.requestId,
+      });
     },
   });
 
@@ -248,6 +286,12 @@ v1.post('/chat/completions', async (c) => {
       return c.json(
         { error: { message: result.message, type: 'invalid_request_error', code: 'model_not_found' } },
         404,
+      );
+    }
+    if (result.reason === 'routing_unavailable') {
+      return c.json(
+        { error: { message: 'routing unavailable', type: 'server_error', code: 'routing_unavailable' } },
+        503,
       );
     }
     if (result.reason === 'provider_not_configured') {
@@ -259,6 +303,13 @@ v1.post('/chat/completions', async (c) => {
             code: 'provider_not_configured',
           },
         },
+        503,
+      );
+    }
+    if (result.reason === 'provider_unavailable') {
+      c.header('Retry-After', String(retryAfterSeconds(result.retryAfterMs)));
+      return c.json(
+        { error: { message: 'provider unavailable', type: 'server_error', code: 'provider_unavailable' } },
         503,
       );
     }
@@ -286,129 +337,200 @@ v1.post('/chat/completions', async (c) => {
 
   const upstream = result.upstream;
 
-  // 3a. Streaming: passthrough chunks, track completion tokens from SSE data, settle accurately after stream end.
+  // 3a. Streaming: sanitize each upstream chunk before forwarding, then settle accurately.
   if (wantsStream && upstream.body) {
     return streamSSE(c, async (stream) => {
       const reader = upstream.body!.getReader();
       const decoder = new TextDecoder();
       const finalizer = createOpenAiStreamFinalizer();
+      // Two independent failure sources: the upstream reader and the client-facing
+      // writer. They must not be conflated, or a disconnect becomes a free request.
+      let clientGone = false;
+      let upstreamBroke = false;
+      const markClientGone = () => {
+        clientGone = true;
+      };
+      if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+      stream.onAbort(markClientGone);
+
       // Heartbeats are idle-only: `touch()` on every upstream byte keeps them from
       // firing during an active stream, and `atLineBoundary` prevents injecting a
       // comment into a partially written `data:` line.
       let atLineBoundary = true;
       const heartbeat = startHeartbeat(
         () => {
-          void stream.write(': keepalive\n\n');
+          if (!clientGone) void stream.write(': keepalive\n\n');
         },
         heartbeatMs(),
         () => !finalizer.done && atLineBoundary,
       );
       const writeUpstream = async (text: string) => {
+        if (clientGone || stream.aborted || c.req.raw.signal.aborted) {
+          clientGone = true;
+          return;
+        }
         atLineBoundary = text.endsWith('\n');
-        await stream.write(text);
+        try {
+          await stream.write(text);
+        } catch {
+          clientGone = true;
+        }
+        if (stream.aborted) clientGone = true;
         heartbeat.touch();
       };
-      let buffer = '';
-      let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
-      let lastKnownCompletionTokens = 0;
-      let completionText = '';
-      let failed = false;
+      const billing: {
+        usage: { prompt_tokens?: number; completion_tokens?: number } | null;
+        lastKnownCompletionTokens: number;
+        completionText: string;
+      } = { usage: null, lastKnownCompletionTokens: 0, completionText: '' };
+      let validChunks = 0;
+      let errorPayloadSeen = false;
+
+      const sanitizer = createSseSanitizer({
+        publicModel: body.model,
+        clientWantsUsage,
+        onChunk: (chunk) => {
+          const j = chunk as { usage?: { prompt_tokens?: number; completion_tokens?: number }; choices?: { delta?: { content?: unknown } }[] };
+          if (j.usage) billing.usage = j.usage;
+          if (j.usage?.completion_tokens != null) {
+            billing.lastKnownCompletionTokens = j.usage.completion_tokens;
+          }
+          billing.completionText += deltaText(j);
+        },
+        onDrop: (reason) => {
+          if (reason === 'error_payload') errorPayloadSeen = true;
+        },
+      });
+
+      const forward = async (text: string) => {
+        if (!text) return;
+        finalizer.push(text);
+        // A forwarded payload that is not only `[DONE]` counts as a valid chunk.
+        if (!errorPayloadSeen && hasForwardedData(text)) validChunks++;
+        await writeUpstream(text);
+      };
 
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunkText = decoder.decode(value, { stream: true });
-          finalizer.push(chunkText);
-          await writeUpstream(chunkText);
-          buffer += chunkText;
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data: ')) continue;
-            const data = trimmed.slice(6).trim();
-            if (!data || data === '[DONE]') continue;
-            try {
-              const j = JSON.parse(data);
-              if (j.usage) usage = j.usage;
-              if (j.usage?.completion_tokens != null) {
-                lastKnownCompletionTokens = j.usage.completion_tokens;
-              }
-              completionText += deltaText(j);
-            } catch {
-              // partial chunk, ignore
-            }
+        while (!clientGone) {
+          // A disconnect can land between reads; do not wait for the next failing read.
+          if (c.req.raw.signal.aborted || stream.aborted) {
+            clientGone = true;
+            break;
+          }
+          let read: ReadableStreamReadResult<Uint8Array>;
+          try {
+            read = await reader.read();
+          } catch {
+            // An aborted upstream fetch is usually the client's abort racing through
+            // AbortSignal.any; distinguish it from an upstream that actually broke.
+            if (c.req.raw.signal.aborted || stream.aborted) clientGone = true;
+            else upstreamBroke = true;
+            break;
+          }
+          if (read.done) break;
+          const chunkText = decoder.decode(read.value, { stream: true });
+          await forward(sanitizer.push(chunkText));
+          if (clientGone) break;
+          // An upstream error payload is terminal: stop reading and finish.
+          if (errorPayloadSeen) break;
+        }
+
+        if (clientGone) {
+          // Stop paying the upstream for tokens nobody will read.
+          await reader.cancel().catch(() => {});
+        } else {
+          // Flush any bytes held back by the streaming decoder and the line buffer.
+          const rest = decoder.decode();
+          const tail = (rest ? sanitizer.push(rest) : '') + sanitizer.flush();
+          await forward(tail);
+
+          if (errorPayloadSeen) {
+            // The sanitizer already wrote exactly one generic error chunk.
+            const ending = finalizer.end();
+            if (ending) await writeUpstream(ending);
+          } else if (upstreamBroke || validChunks === 0) {
+            // Sanitized error chunk, then [DONE]; never forward upstream text.
+            await writeUpstream(finalizer.fail());
+          } else {
+            // Guarantee a terminator for OpenAI clients.
+            const ending = finalizer.end();
+            if (ending) await writeUpstream(ending);
           }
         }
-
-        // Flush any bytes held back by the streaming decoder.
-        const rest = decoder.decode();
-        if (rest) {
-          finalizer.push(rest);
-          await writeUpstream(rest);
-          buffer += rest;
-        }
-
-        if (buffer.trim()) {
-          const trimmed = buffer.trim();
-          if (trimmed.startsWith('data: ')) {
-            const data = trimmed.slice(6).trim();
-            if (data && data !== '[DONE]') {
-              try {
-                const j = JSON.parse(data);
-                if (j.usage) usage = j.usage;
-                if (j.usage?.completion_tokens != null) {
-                  lastKnownCompletionTokens = j.usage.completion_tokens;
-                }
-                completionText += deltaText(j);
-              } catch {
-                // ignore
-              }
-            }
-          }
-          buffer = '';
-        }
-
-        // Guarantee a terminator for OpenAI clients.
-        const tail = finalizer.end();
-        if (tail) await writeUpstream(tail);
       } catch {
-        failed = true;
-        // Sanitized error chunk, then [DONE]; never forward upstream text.
-        await stream.write(finalizer.fail());
+        // Unexpected failure outside read/write (sanitizer/decoder): treat as upstream break.
+        if (!clientGone) {
+          upstreamBroke = true;
+          // Sanitized error chunk, then [DONE]; never forward upstream text.
+          if (!errorPayloadSeen) await writeUpstream(finalizer.fail());
+        }
       } finally {
         heartbeat.stop();
       }
 
-      const promptT = usage?.prompt_tokens ?? result.promptTokens;
+      const promptT = billing.usage?.prompt_tokens ?? result.promptTokens;
       // Upstream that ignores stream_options.include_usage: estimate from the text actually streamed.
       const completionT =
-        usage?.completion_tokens ??
-        (lastKnownCompletionTokens > 0 ? lastKnownCompletionTokens : estimatePromptTokens(completionText));
+        billing.usage?.completion_tokens ??
+        (billing.lastKnownCompletionTokens > 0
+          ? billing.lastKnownCompletionTokens
+          : estimatePromptTokens(billing.completionText));
+
+      // D8: a disconnect after upstream headers is chargeable (`partial`, even with
+      // zero output). An upstream break is chargeable only once tokens were delivered,
+      // unless the operator opted into refunding those breaks.
+      let status: 'success' | 'error' | 'partial';
+      let streamErrorType: string | null = null;
+      if (clientGone) {
+        status = 'partial';
+        streamErrorType = 'client_disconnected';
+      } else if (errorPayloadSeen) {
+        status = 'error';
+        streamErrorType = 'invalid_upstream_response';
+      } else if (upstreamBroke) {
+        const chargePartial = completionT > 0 && process.env.PARTIAL_BILLING_UPSTREAM_BREAK !== 'refund';
+        status = chargePartial ? 'partial' : 'error';
+        streamErrorType = 'stream_disconnected';
+      } else if (validChunks === 0) {
+        status = 'error';
+        streamErrorType = 'invalid_upstream_response';
+      } else {
+        status = 'success';
+      }
 
       await result.finalize({
         promptTokens: promptT,
         completionTokens: completionT,
         latencyMs: Date.now() - startedAt,
-        status: failed ? 'error' : 'success',
-        errorType: failed ? 'stream_disconnected' : null,
+        status,
+        errorType: streamErrorType,
         streamed: true,
       });
     });
   }
 
-  // 3b. Non-streaming: read full response, settle, forward.
-  const text = await upstream.text();
-  let promptT = result.promptTokens;
-  let completionT = 0;
-  try {
-    const j = JSON.parse(text);
-    promptT = j.usage?.prompt_tokens ?? result.promptTokens;
-    completionT = j.usage?.completion_tokens ?? 0;
-  } catch {
-    // non-json upstream body, keep estimates
+  // 3b. Non-streaming: the shared loop already read and validated/sanitized the body,
+  // so the served route made it through `invalid_body` failover before we got here.
+  const sanitized = result.sanitized;
+  if (!sanitized) {
+    // Defensive: a non-stream success must always carry a sanitized body.
+    await result.finalize({
+      promptTokens: result.promptTokens,
+      completionTokens: 0,
+      latencyMs: Date.now() - startedAt,
+      status: 'error',
+      errorType: 'invalid_upstream_response',
+      streamed: false,
+    });
+    return c.json(
+      { error: { message: 'upstream provider error', type: 'server_error', code: 'provider_error' } },
+      502,
+    );
   }
+
+  const usage = (sanitized.json as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
+  const promptT = usage?.prompt_tokens ?? result.promptTokens;
+  const completionT = usage?.completion_tokens ?? 0;
   await result.finalize({
     promptTokens: promptT,
     completionTokens: completionT,
@@ -417,14 +539,31 @@ v1.post('/chat/completions', async (c) => {
     streamed: false,
   });
 
-  return c.body(text, upstream.status as ContentfulStatusCode, { 'content-type': 'application/json' });
+  return c.body(sanitized.body, upstream.status as ContentfulStatusCode, { 'content-type': 'application/json' });
 });
 
-/** Text of one streamed chat chunk (all choices), for token estimation when usage is missing. */
-function deltaText(chunk: { choices?: { delta?: { content?: unknown } }[] }): string {
+/** True when sanitized SSE text contains a data payload other than `[DONE]`. */
+function hasForwardedData(text: string): boolean {
+  return text.split('\n').some((line) => {
+    const trimmed = line.trim();
+    return trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]';
+  });
+}
+
+/**
+ * Text of one streamed chat chunk (all choices), for token estimation when usage
+ * is missing. Reasoning models bill output tokens for `reasoning_content`
+ * (DeepSeek/ZenMux) or `reasoning`, so count those too.
+ */
+function deltaText(chunk: {
+  choices?: { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }[];
+}): string {
   let out = '';
   for (const ch of chunk.choices ?? []) {
-    if (typeof ch.delta?.content === 'string') out += ch.delta.content;
+    const delta = ch.delta;
+    if (typeof delta?.content === 'string') out += delta.content;
+    if (typeof delta?.reasoning_content === 'string') out += delta.reasoning_content;
+    if (typeof delta?.reasoning === 'string') out += delta.reasoning;
   }
   return out;
 }

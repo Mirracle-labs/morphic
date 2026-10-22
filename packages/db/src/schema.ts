@@ -163,6 +163,8 @@ export const models = pgTable(
     providerCostOutputPer1m: bigint('provider_cost_output_per_1m', { mode: 'number' }),
     status: text('status', { enum: ['active', 'inactive', 'deprecated'] }).notNull().default('active'),
     replacementModelAlias: text('replacement_model_alias'),
+    // DEPRECATED (Pooling Phase 1B). Legacy single-fallback wiring, kept for one transition
+    // period: it is read only when a model has zero enabled model_provider_pool rows (plan D2).
     fallbackProviderId: uuid('fallback_provider_id').references(() => providers.id, {
       onDelete: 'set null',
     }),
@@ -170,6 +172,50 @@ export const models = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [index('models_provider_idx').on(t.providerId)],
+);
+
+/**
+ * Provider pool (Pooling Phase 1B): ordered upstream candidates for one public model.
+ *
+ * D9 parity invariant: every ENABLED row must serve its model at a context window of at
+ * least `models.context_length` and support ALL of `models.capabilities`. This is enforced
+ * when seeding/administering the pool, never per request.
+ *
+ * D10: UNIQUE(model_id, provider_id) means a provider can appear at most once per model
+ * (no two keys/accounts of the same provider for one model).
+ */
+export const modelProviderPool = pgTable(
+  'model_provider_pool',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    modelId: uuid('model_id')
+      .notNull()
+      .references(() => models.id, { onDelete: 'restrict' }),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'restrict' }),
+    // The model string this specific provider expects (may differ per provider).
+    providerModelId: text('provider_model_id').notNull(),
+    // Lower priority is tried first; equal priority is spread by weight.
+    priority: integer('priority').notNull(),
+    weight: integer('weight').notNull().default(100),
+    isEnabled: boolean('is_enabled').notNull().default(true),
+    // Optional upstream-cost override, in credits per 1M tokens. Applies only when BOTH
+    // columns are non-null; otherwise the model-level provider_cost_* values are used
+    // (the same rule as today's ResolvedRoute.upstreamPricing).
+    costInputPer1m: integer('cost_input_per_1m'),
+    costOutputPer1m: integer('cost_output_per_1m'),
+    // Per-entry override for slow first-token models (streaming only).
+    ttfbTimeoutMs: integer('ttfb_timeout_ms'),
+    // Informational tag only; no automatic enforcement in this phase.
+    dataPolicy: text('data_policy'),
+    createdAt: now(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('model_provider_pool_model_provider_unique').on(t.modelId, t.providerId),
+    index('model_provider_pool_model_priority_idx').on(t.modelId, t.priority),
+  ],
 );
 
 // ── Request Logs (Observability) ─────────────────────
@@ -184,12 +230,19 @@ export const requestLogs = pgTable(
     modelAlias: text('model_alias').notNull(),
     resolvedModelId: uuid('resolved_model_id').references(() => models.id, { onDelete: 'set null' }),
     providerName: text('provider_name'),
+    // Pooling 1F observability (internal only; never returned to clients).
+    servedProviderId: uuid('served_provider_id'),
+    servedProviderModelId: text('served_provider_model_id'),
+    attempts: integer('attempts'),
+    failoverReasons: jsonb('failover_reasons').$type<string[]>(),
+    attemptLatenciesMs: jsonb('attempt_latencies_ms').$type<number[]>(),
     promptTokens: integer('prompt_tokens'),
     completionTokens: integer('completion_tokens'),
     creditsConsumed: bigint('credits_consumed', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
     gatewayLatencyMs: integer('gateway_latency_ms'),
-    status: text('status', { enum: ['success', 'error', 'cancelled'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` needs no migration.
+    status: text('status', { enum: ['success', 'error', 'cancelled', 'partial'] }).notNull(),
     errorType: text('error_type'),
     streamed: boolean('streamed').notNull().default(false),
     createdAt: now(),
@@ -348,7 +401,8 @@ export const usageRecords = pgTable(
     // Null when the model has no provider cost configured.
     upstreamCostCredits: bigint('upstream_cost_credits', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
-    status: text('status', { enum: ['success', 'error'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` = delivered tokens, stream not completed.
+    status: text('status', { enum: ['success', 'error', 'partial'] }).notNull(),
     error: text('error'),
     streamed: boolean('streamed').notNull().default(false),
     // Client app that sent the request (X-Title, HTTP-Referer or a known User-Agent); null when unknown.
@@ -528,6 +582,12 @@ export const modelsRelations = relations(models, ({ one, many }) => ({
   provider: one(providers, { fields: [models.providerId], references: [providers.id] }),
   fallbackProvider: one(providers, { fields: [models.fallbackProviderId], references: [providers.id] }),
   requestLogs: many(requestLogs),
+  providerPool: many(modelProviderPool),
+}));
+
+export const modelProviderPoolRelations = relations(modelProviderPool, ({ one }) => ({
+  model: one(models, { fields: [modelProviderPool.modelId], references: [models.id] }),
+  provider: one(providers, { fields: [modelProviderPool.providerId], references: [providers.id] }),
 }));
 
 export const packagesRelations = relations(packages, ({ one }) => ({

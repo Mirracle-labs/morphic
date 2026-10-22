@@ -6,14 +6,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { db, schema as s } from '@morphic/db';
-import { grantCredits } from '@morphic/db/billing';
+import { grantCredits, getBalance } from '@morphic/db/billing';
 import { and, eq } from 'drizzle-orm';
 
 process.env.GATEWAY_IP_RPM = '3';
 process.env.TEST_UPSTREAM_KEY = 'sk-test';
 const { app } = await import('../app');
-const { callProvider } = await import('../domain/router');
-const { recordFailure, recordSuccess, isCircuitOpen } = await import('../domain/circuit-breaker');
+const { callProvider, invalidateRouterCache } = await import('../domain/router');
+const { recordFailure, recordSuccess, checkCircuit, computeProviderAggregate } = await import('../domain/circuit-breaker');
 const { getTrustedClientIp } = await import('../lib/ip');
 const { notifyLowBalance } = await import('../lib/notify');
 const { Hono } = await import('hono');
@@ -60,6 +60,7 @@ async function mkModel(providerId: string, fallbackProviderId: string | null = n
       providerCostOutputPer1m: cost,
     })
     .returning();
+  invalidateRouterCache();
   return m!;
 }
 
@@ -222,16 +223,19 @@ test('P3-01: settlement records upstream cost when the model has provider cost c
 // ── P1-08: circuit breaker off Postgres ──────────────────────────────────────
 test('P1-08: failures count outside Postgres; only the open/close transitions are persisted', async () => {
   const prov = await mkProvider('cb', 'http://cb.upstream.test');
+  const model = await mkModel(prov.id);
   const dbState = async () =>
     (await db.select({ cb: s.providers.circuitBreakerState }).from(s.providers).where(eq(s.providers.id, prov.id)))[0]!.cb;
-  for (let i = 0; i < 4; i++) await recordFailure(prov.id);
+  for (let i = 0; i < 4; i++) await recordFailure(prov.id, model.providerModelId);
   assert.equal((await dbState()).state, 'closed'); // counting never touched the row
-  assert.equal(await isCircuitOpen(prov.id), false);
-  await recordFailure(prov.id);
-  assert.equal(await isCircuitOpen(prov.id), true);
+  assert.equal((await checkCircuit(prov.id, model.providerModelId)).open, false);
+  await recordFailure(prov.id, model.providerModelId);
+  assert.equal((await checkCircuit(prov.id, model.providerModelId)).open, true);
+  await computeProviderAggregate(prov.id); // fire-and-forget transition write
   assert.equal((await dbState()).state, 'open');
-  await recordSuccess(prov.id);
-  assert.equal(await isCircuitOpen(prov.id), false);
+  await recordSuccess(prov.id, model.providerModelId);
+  assert.equal((await checkCircuit(prov.id, model.providerModelId)).open, false);
+  await computeProviderAggregate(prov.id);
   assert.equal((await dbState()).state, 'closed');
 });
 
@@ -556,16 +560,20 @@ for (const [upstreamStatus, clientStatus, code] of [
   });
 }
 
-test('Phase1: a 200 non-JSON upstream body is passed through (pooling 0b will sanitize it)', async () => {
+test('Phase1: a 200 non-JSON upstream body is sanitized into a 502 (pooling 0b)', async () => {
   const prov = await mkProvider('nonjson', 'http://nonjson.upstream.test');
   const model = await mkModel(prov.id);
-  const { rawKey } = await mkUser(1_000_000);
+  const { user, rawKey } = await mkUser(1_000_000);
+  const before = await getBalance(user.id);
   const res = await withUpstream(
     () => new Response('not-json-at-all', { status: 200, headers: { 'content-type': 'text/html' } }),
     () => chat(rawKey, { model: model.publicModelId, messages: [{ role: 'user', content: 'hi' }] }),
   );
-  assert.equal(res.status, 200);
-  assert.equal(await res.text(), 'not-json-at-all');
+  assert.equal(res.status, 502);
+  const text = await res.text();
+  assert.equal(text.includes('not-json-at-all'), false);
+  assert.equal(JSON.parse(text).error.code, 'provider_error');
+  assert.equal(await getBalance(user.id), before);
 });
 
 test('Phase1: an invalid x-api-key is rejected with 401 and a request_id', async () => {

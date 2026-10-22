@@ -1,6 +1,6 @@
 # AGENTS.md — Morphic API Protocol Track
 
-Status: Phase 0, Phase 1 and Phase 2 complete (working tree, uncommitted); Phase 3 not started.
+Status: Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F complete. Phase 4 is next; Pooling 1G is deferred until 1E runs in production. Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
 Repo: `/home/rose/projects/morphic`.
 Scope: inbound protocol compatibility for the Hono gateway.
 
@@ -20,22 +20,21 @@ If the two plans conflict, **stop and ask**. Do not silently pick one.
 
 - Hono 4.9 + `@hono/node-server`, pnpm monorepo, Drizzle/Postgres, Redis.
 - `apps/api/src/app.ts`: CORS, request-id, global error handler, route mounts.
-- `apps/api/src/routes/v1.ts`: `POST /v1/chat/completions`, `GET /v1/models`, reserve → provider → settle, failover, SSE passthrough.
-- `apps/api/src/domain/router.ts`: model resolution, `OpenAiCompatibleAdapter`, error normalization, 55 s total timeout.
-- `apps/api/src/middleware/auth.ts`: accepts only `Authorization: Bearer mp-...`.
+- `apps/api/src/routes/v1.ts`: `POST /v1/chat/completions`, `GET /v1/models`, shared `startCompletion`, SSE sanitizer + heartbeat, partial billing.
+- `apps/api/src/domain/router.ts`: routing snapshot + `createRoutePlan`, `OpenAiCompatibleAdapter`, Appendix B error normalization, TTFB/total timeouts.
+- `apps/api/src/domain/completion.ts`: shared resolve → reserve → failover → settle/log loop for OpenAI and Anthropic.
+- `apps/api/src/middleware/auth.ts`: Bearer `mp-...` plus `x-api-key` on inference routes.
 - `packages/shared/src/types.ts`: lenient `chatCompletionRequestSchema`.
 - `packages/shared/src/models.ts`: hardcoded canonical models + aliases.
-- `packages/db/src/schema.ts`: `providers`, `models` with `fallbackProviderId`.
+- `packages/db/src/schema.ts`: `providers`, `models`, `model_provider_pool`, request-log pool fields.
 - Seed providers: DeepSeek, Qwen, Kimi (OpenAI-compatible).
-- No `/v1/messages`, no Anthropic translator, no `count_tokens`, no Anthropic error envelope.
+- `/v1/messages` + `/v1/messages/count_tokens` mounted when `ANTHROPIC_ENABLED=true`, with Anthropic translators and error envelope.
 
-Known protocol gaps:
+Known protocol gaps (Phase 4):
 
-- `content: null`, `developer` role, empty `tool_calls`, orphan tool pairs are forwarded unchanged.
-- Upstream 4xx (except 401/403/429) becomes 502 generic.
-- SSE passthrough has no guaranteed `[DONE]` and no heartbeat.
-- 10 MB body and 55 s total timeout apply to all routes.
-- No Claude alias mapping; `/v1/models` is DB-only.
+- Capability metadata is not stored per provider/model; unsupported tools/vision are not rejected early.
+- `tool_choice: required` is sent as-is and can 400 on reasoning models.
+- Reasoning echo/re-injection (`reasoning_echo_required`) is not implemented.
 
 ## 3. Locked decisions
 
@@ -298,6 +297,8 @@ Rollback: `ANTHROPIC_ENABLED=false`; unmount route; revert PR.
 
 ### Phase 3 — Pool integration
 
+**Status: complete (2026-10-22).**
+
 After pooling Phase 1E.
 
 - Anthropic completion uses the route plan and provider candidates.
@@ -305,6 +306,14 @@ After pooling Phase 1E.
 - Failover only before headers/first byte.
 - Settle uses served route pricing/upstream pricing.
 - Tests: primary fail → fallback; all fail → 503; client abort → no provider failure; partial stream → partial billing.
+
+Delivered:
+
+- `routes/anthropic.ts` now settles client aborts as `partial` (`client_disconnected`) and upstream breaks per `PARTIAL_BILLING_UPSTREAM_BREAK`; it emits a sanitized `event: error` for mid-stream failures.
+- All-circuits-open returns `503 api_error` with `Retry-After` (1–120 s).
+- `routes/anthropic-failover.test.ts` covers primary → fallback, all candidates failing, all circuits open, client abort, upstream cut, deprecated redirect, and `invalid_body` failover (7 tests).
+- Attempt exhaustion keeps the Phase 2 5xx mapping (`500 api_error` / `529`); the Phase 3 “all fail → 503” path is all-circuits-open / no usable candidate. Owner decision if a literal 503 is required.
+- `usage_records.provider_id` remains null (`settle()` does not accept it); `request_logs.served_provider_id` is authoritative.
 
 No `api_format` yet.
 
@@ -397,11 +406,11 @@ curl -N http://localhost:8787/v1/messages ...
 - [ ] OpenAI stream always ends with `[DONE]`; heartbeat works.
 - [ ] `x-api-key` + Bearer both work.
 - [ ] Claude Code 20+ step task succeeds via `/v1/messages`.
-- [ ] Anthropic SDK text/tool/stream tests pass.
-- [ ] `count_tokens` works.
-- [ ] Body/timeout limits enforced with clear errors.
-- [ ] Billing: reserve/settle/partial correct on all paths.
-- [ ] No provider identity/secret leakage.
+- [x] Anthropic SDK text/tool/stream tests pass.
+- [x] `count_tokens` works.
+- [x] Body/timeout limits enforced with clear errors.
+- [x] Billing: reserve/settle/partial correct on all paths.
+- [x] No provider identity/secret leakage.
 - [ ] Typecheck, lint, tests green.
 - [ ] Rollback documented and tested.
 
