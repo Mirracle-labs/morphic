@@ -8,6 +8,7 @@ import { motion, useScroll, useMotionValueEvent } from 'framer-motion';
 import { useTranslation } from '@/lib/i18n';
 import { Menu, X, LayoutDashboard, Globe } from 'lucide-react';
 import CommandPalette from './CommandPalette';
+import NavMenu, { analyticsItems } from './NavMenu';
 
 interface NavbarProps {
   session?: any;
@@ -60,7 +61,7 @@ export default function Navbar({ session }: NavbarProps) {
   React.useEffect(() => {
     if (!isHome) return;
 
-    const sectionIds = ['integration', 'pricing', 'faq'];
+    const sectionIds = ['pricing', 'faq'];
     // Layout reads are batched to one per frame instead of one per scroll event.
     let frame = 0;
     const onScroll = () => {
@@ -95,12 +96,17 @@ export default function Navbar({ session }: NavbarProps) {
   }, [isHome]);
 
   const navLinks = [
-    { href: '/#integration', label: t.nav.howItWorks, isRoute: false },
     { href: '/models', label: t.nav.models, isRoute: true },
     { href: '/pricing', label: t.nav.price, isRoute: true },
     { href: '/docs', label: t.nav.docs || 'Docs', isRoute: true },
     { href: '/#faq', label: t.nav.faq, isRoute: false },
   ];
+
+  const analytics = analyticsItems(locale === 'en');
+  // Mobile has no hover, so the Analytics pages are listed inline right after Models.
+  const mobileLinks = navLinks.flatMap((l) =>
+    l.href === '/models' ? [l, ...analytics.map((a) => ({ href: a.href, label: `${t.nav.analytics}: ${a.label}`, isRoute: true }))] : [l],
+  );
 
   const isLinkActive = (href: string, isRoute: boolean) => {
     if (isRoute) {
@@ -149,9 +155,11 @@ export default function Navbar({ session }: NavbarProps) {
           {navLinks.map((link) => {
             const isActive = isLinkActive(link.href, link.isRoute);
             const pillHere = hoveredHref ? hoveredHref === link.href : isActive;
+            const analyticsOn = pathname.startsWith('/analytics');
+            const analyticsPill = hoveredHref ? hoveredHref === '/analytics' : analyticsOn;
             return (
+              <React.Fragment key={link.href}>
               <Link
-                key={link.href}
                 href={link.href}
                 onMouseEnter={() => setHoveredHref(link.href)}
                 aria-current={isActive ? 'page' : undefined}
@@ -169,6 +177,26 @@ export default function Navbar({ session }: NavbarProps) {
                 )}
                 <span suppressHydrationWarning className="relative">{link.label}</span>
               </Link>
+              {link.href === '/models' && (
+                <NavMenu
+                  items={analytics}
+                  onPointerEnter={() => setHoveredHref('/analytics')}
+                  buttonClassName={`nav-ink relative flex items-center gap-1 px-3.5 py-2 rounded-full transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
+                    analyticsPill || analyticsOn ? 'is-on text-neutral-950' : 'hover:text-neutral-950'
+                  }`}
+                >
+                  {analyticsPill && (
+                    <motion.span
+                      layoutId="nav-pill"
+                      aria-hidden="true"
+                      className="nav-pill absolute inset-0 rounded-full bg-neutral-900/[0.06]"
+                      transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+                    />
+                  )}
+                  <span suppressHydrationWarning className="relative">{t.nav.analytics}</span>
+                </NavMenu>
+              )}
+              </React.Fragment>
             );
           })}
         </nav>
@@ -235,7 +263,7 @@ export default function Navbar({ session }: NavbarProps) {
       {/* Mobile Slideout Menu */}
       {mobileMenuOpen && (
         <div className="md:hidden mx-auto max-w-5xl mt-2 bg-white border border-neutral-200 rounded-3xl p-4 shadow-[0_16px_40px_rgba(0,0,0,0.08)] text-neutral-800 flex flex-col gap-2.5 animate-in fade-in slide-in-from-top-2 duration-200 ease-out transform-gpu">
-          {navLinks.map((link) => {
+          {mobileLinks.map((link) => {
             const isActive = isLinkActive(link.href, link.isRoute);
             return (
               <Link

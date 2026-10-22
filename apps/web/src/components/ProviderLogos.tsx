@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import { Cpu } from 'lucide-react';
+import { makerByPrefix } from '@/lib/model-maker';
 
 interface LogoProps {
   className?: string;
@@ -45,6 +46,10 @@ export function GrokLogo({ className = 'w-4 h-4' }: LogoProps) {
 }
 
 export function ModelProviderLogo({ provider = '', className = 'w-4 h-4' }: { provider?: string; className?: string }) {
+  const hit = makerByPrefix(provider || '');
+  if (hit) {
+    return <Image src={hit.logo} alt={hit.maker} width={24} height={24} unoptimized className={className} />;
+  }
   const p = (provider || '').toLowerCase();
   if (p.includes('claude') || p.includes('anthropic')) {
     return <ClaudeLogo className={className} />;

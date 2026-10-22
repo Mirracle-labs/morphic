@@ -184,7 +184,7 @@ async function loadModelStats() {
       .select({
         count: sql<number>`count(*)::int`,
         avgCreditsPer1m: sql<number>`coalesce(avg((${s.models.inputCreditsPer1m} + ${s.models.outputCreditsPer1m}) / 2.0), 0)::float`,
-        minInputRate: sql<number>`coalesce(min(${s.models.inputCreditsPer1m}), 0)::int`,
+        minInputRate: sql<number>`coalesce(min(${s.models.inputCreditsPer1m}), 0)::bigint`,
       })
       .from(s.models)
       .where(eq(s.models.status, 'active'));

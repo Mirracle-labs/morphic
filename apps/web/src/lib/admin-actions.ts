@@ -11,6 +11,7 @@ import { normalizeCatalog, type CatalogResult } from '@/lib/provider-catalog';
 import { invalidate } from '@/lib/memo';
 import { parsePackageForm } from '@/lib/package-form';
 import { getServerTranslation } from '@/lib/i18n/server';
+import { multiplier, UNLIMITED_MAX_OUTPUT_MULTIPLIER } from '@morphic/shared/credits';
 
 async function audit(adminId: string, action: string, entity: string, entityId: string | null, detail?: unknown) {
   await db.insert(s.adminAuditLog).values({
@@ -380,6 +381,23 @@ export async function savePackage(formData: FormData): Promise<PackageResult> {
   const parsed = parsePackageForm(formData, en);
   if ('error' in parsed) return { ok: false, message: parsed.error! };
   const values = parsed.values;
+  if (values.kind === 'unlimited') {
+    const [m] = await db
+      .select({ name: s.models.displayName, out: s.models.outputCreditsPer1m })
+      .from(s.models)
+      .where(eq(s.models.id, values.modelId!))
+      .limit(1);
+    if (!m) return { ok: false, message: en ? 'Model not found.' : 'Model tidak ditemukan.' };
+    if (multiplier(m.out) > UNLIMITED_MAX_OUTPUT_MULTIPLIER) {
+      const x = `${multiplier(m.out).toFixed(0)}x`;
+      return {
+        ok: false,
+        message: en
+          ? `${m.name} costs ${x} on output; unlimited passes are limited to ${UNLIMITED_MAX_OUTPUT_MULTIPLIER}x models.`
+          : `${m.name} output-nya ${x}; paket unlimited hanya untuk model maksimal ${UNLIMITED_MAX_OUTPUT_MULTIPLIER}x.`,
+      };
+    }
+  }
   try {
     if (id) {
       const [p] = await db

@@ -17,6 +17,7 @@ import { reserve, settle, InsufficientCreditsError } from '@morphic/db/billing';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { notifyLowBalance } from '../lib/notify';
 import { alertNegativeMargin } from '../lib/alert';
+import { appFromRequest } from '../lib/app-attribution';
 
 const v1 = new Hono();
 
@@ -120,6 +121,7 @@ v1.post('/chat/completions', async (c) => {
   const requestId = c.get('requestId');
   const startedAt = Date.now();
   const { keyId, userId } = c.get('apiKey');
+  const app = appFromRequest(c.req.raw.headers);
   const t = (label: string) => console.log(`[${requestId.slice(0,8)}] +${Date.now()-startedAt}ms ${label}`);
 
   let parsed: ReturnType<typeof chatCompletionRequestSchema.safeParse>;
@@ -348,6 +350,7 @@ v1.post('/chat/completions', async (c) => {
 
     const settleRes = await settle({
       reservation,
+      app,
       userId,
       promptTokens,
       completionTokens: 0,
@@ -395,6 +398,7 @@ v1.post('/chat/completions', async (c) => {
     const errText = await upstream.text().catch(() => '');
     const settleRes = await settle({
       reservation,
+      app,
       userId,
       promptTokens,
       completionTokens: 0,
@@ -508,6 +512,7 @@ v1.post('/chat/completions', async (c) => {
 
       const settleRes = await settle({
         reservation,
+        app,
         userId,
         promptTokens: promptT,
         completionTokens: completionT,
@@ -552,6 +557,7 @@ v1.post('/chat/completions', async (c) => {
   }
   const settleRes = await settle({
     reservation,
+    app,
     userId,
     promptTokens: promptT,
     completionTokens: completionT,

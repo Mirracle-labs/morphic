@@ -4,6 +4,7 @@ config({ path: resolve(process.cwd(), '../../.env') });
 import { db } from './index.ts';
 import * as s from './schema.ts';
 import { sql } from 'drizzle-orm';
+import { BALANCE_CREDITS_PER_IDR } from '@morphic/shared/credits';
 
 async function seed() {
   // Providers — credentials encrypted at runtime by the API; seed uses
@@ -48,8 +49,8 @@ async function seed() {
         description: 'Coding & reasoning model',
         contextLength: 65536,
         capabilities: ['coding', 'reasoning'],
-        inputCreditsPer1m: 100,
-        outputCreditsPer1m: 200,
+        inputCreditsPer1m: 5_200_000, // 5.2x
+        outputCreditsPer1m: 10_400_000,
       },
       {
         providerId: providersByName['qwen']!,
@@ -59,8 +60,8 @@ async function seed() {
         description: 'General purpose & reasoning',
         contextLength: 32768,
         capabilities: ['general', 'reasoning'],
-        inputCreditsPer1m: 120,
-        outputCreditsPer1m: 360,
+        inputCreditsPer1m: 6_240_000,
+        outputCreditsPer1m: 18_720_000,
       },
       {
         providerId: providersByName['kimi']!,
@@ -70,8 +71,8 @@ async function seed() {
         description: 'Coding with long context',
         contextLength: 262144,
         capabilities: ['coding', 'long-context'],
-        inputCreditsPer1m: 80,
-        outputCreditsPer1m: 240,
+        inputCreditsPer1m: 4_160_000,
+        outputCreditsPer1m: 12_480_000,
       },
     ])
     .onConflictDoNothing({ target: s.models.publicModelId });
@@ -85,62 +86,49 @@ async function seed() {
   await db
     .insert(s.packages)
     .values([
+      // 1 credit = 1 base token. Token pack defines 1x: 10M tokens = Rp 4.000.
       {
-        name: '100K Credits',
-        description: '100,000 credits, any model, 30 days',
-        creditAllowance: 100_000,
+        name: 'Token Pack 10M',
+        description: '10.000.000 token untuk semua model (dipotong sesuai multiplier model). Berlaku 30 hari.',
+        kind: 'tokens',
+        creditAllowance: 10_000_000,
         modelId: null,
         durationHours: 24 * 30,
-        priceCents: 5_000_00,
-        status: 'active',
-      },
-      {
-        name: 'DeepSeek V4 — 1 Day',
-        description: 'Unlimited DeepSeek V4 for 24 hours (fair use)',
-        creditAllowance: 100_000,
-        modelId: deepseekV4[0]?.id ?? null,
-        durationHours: 24,
-        priceCents: 2_500_00,
-        status: 'active',
-      },
-      {
-        name: '5M Token Starter',
-        description: '5.000.000 token AI untuk semua model, cukup Rp 5.000. Berlaku 1 tahun.',
-        creditAllowance: 5_000_000,
-        modelId: null,
-        durationHours: 24 * 365,
-        priceCents: 5_000, // IDR rows store whole rupiah
+        priceCents: 4_000, // IDR rows store whole rupiah
         currency: 'IDR',
         status: 'active',
       },
       {
-        name: '5M Token Starter USD',
-        description: '5,000,000 AI tokens for every model, just $0.40. Valid for 1 year.',
-        creditAllowance: 5_000_000,
+        name: 'Balance 20M',
+        description: 'Saldo 20.000.000 token, bayar sesuai pemakaian. Tidak hangus.',
+        kind: 'balance',
+        creditAllowance: 10_000 * BALANCE_CREDITS_PER_IDR,
         modelId: null,
-        durationHours: 24 * 365,
-        priceCents: 40, // same ~Rp 12.500/USD ratio as the other token packs
-        currency: 'USD',
+        durationHours: null,
+        priceCents: 10_000,
+        currency: 'IDR',
         status: 'active',
       },
       {
-        name: 'Starter USD',
-        description: '5,000 credits',
-        creditAllowance: 5_000,
+        name: 'Balance 100M',
+        description: 'Saldo 100.000.000 token, bayar sesuai pemakaian. Tidak hangus.',
+        kind: 'balance',
+        creditAllowance: 50_000 * BALANCE_CREDITS_PER_IDR,
         modelId: null,
-        durationHours: 24 * 30,
-        priceCents: 500,
-        currency: 'USD',
+        durationHours: null,
+        priceCents: 50_000,
+        currency: 'IDR',
         status: 'active',
       },
       {
-        name: 'Pro USD',
-        description: '20,000 credits',
-        creditAllowance: 20_000,
-        modelId: null,
-        durationHours: 24 * 30,
-        priceCents: 1500,
-        currency: 'USD',
+        name: 'DeepSeek V4 Unlimited 24h',
+        description: 'DeepSeek V4 tanpa multiplier selama 24 jam, fair use 50 juta token/hari.',
+        kind: 'unlimited',
+        creditAllowance: 50_000_000, // raw tokens per day
+        modelId: deepseekV4[0]?.id ?? null,
+        durationHours: 24,
+        priceCents: 25_000,
+        currency: 'IDR',
         status: 'active',
       },
     ])

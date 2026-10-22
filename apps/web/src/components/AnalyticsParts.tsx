@@ -28,7 +28,7 @@ export function PageHeader({ title, subtitle, days, isId }: { title: string; sub
             href={`${pathname}?range=${r}d`}
             scroll={false}
             aria-current={r === days ? 'page' : undefined}
-            className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${focusRing} ${
+            className={`rounded-full px-4 py-1.5 text-sm pointer-coarse:min-h-11 font-semibold transition-colors ${focusRing} ${
               r === days ? 'bg-neutral-950 text-white' : 'text-neutral-700 hover:text-neutral-950 hover:bg-neutral-100'
             }`}
           >

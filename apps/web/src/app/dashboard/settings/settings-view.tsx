@@ -252,7 +252,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium text-neutral-800 border border-neutral-200 bg-neutral-50/80">
+            <span className="inline-flex items-center gap-1.5 px-2.5 pointer-coarse:min-h-11 py-1 rounded-lg text-xs font-mono font-medium text-neutral-800 border border-neutral-200 bg-neutral-50/80">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
               <span>{isId ? 'Akun Aktif' : 'Account Active'}</span>
             </span>
@@ -367,7 +367,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
                   <button
                     type="button"
                     onClick={copyUserId}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-neutral-200 hover:bg-neutral-100 active:scale-95 text-neutral-700 hover:text-neutral-950 transition text-xs font-semibold shadow-2xs cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2.5 pointer-coarse:min-h-11 py-1 rounded-lg bg-white border border-neutral-200 hover:bg-neutral-100 active:scale-95 text-neutral-700 hover:text-neutral-950 transition text-xs font-semibold shadow-2xs cursor-pointer"
                   >
                     {copiedId ? (
                       <>
@@ -455,7 +455,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
                 </div>
 
                 {item.isCurrent ? (
-                  <SignOutButton className="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-neutral-700 text-xs font-semibold transition-colors shadow-2xs cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950">
+                  <SignOutButton className="px-3 py-1.5 rounded-xl bg-white pointer-coarse:min-h-11 border border-neutral-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-neutral-700 text-xs font-semibold transition-colors shadow-2xs cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950">
                     {isId ? 'Keluar Sesi' : 'Sign Out'}
                   </SignOutButton>
                 ) : (
@@ -463,7 +463,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
                     type="button"
                     onClick={() => handleRevoke(item.id)}
                     disabled={revokingId !== null}
-                    className="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 disabled:opacity-60 text-neutral-700 text-xs font-semibold transition-colors shadow-2xs cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+                    className="px-3 py-1.5 rounded-xl bg-white pointer-coarse:min-h-11 border border-neutral-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 disabled:opacity-60 text-neutral-700 text-xs font-semibold transition-colors shadow-2xs cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
                   >
                     {revokingId === item.id
                       ? isId
@@ -555,7 +555,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
                 </p>
               </div>
             </div>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium text-neutral-800 border border-neutral-200 bg-neutral-50/80">
+            <span className="inline-flex items-center gap-1.5 px-2.5 pointer-coarse:min-h-11 py-1 rounded-lg text-xs font-mono font-medium text-neutral-800 border border-neutral-200 bg-neutral-50/80">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
               <span>{isId ? 'ZDR Aktif' : 'ZDR Enforced'}</span>
             </span>

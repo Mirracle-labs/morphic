@@ -40,3 +40,54 @@ https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE
 OpenAI and Yi use the upstream monochrome variants with CSS inversion to render
 white on the existing dark logo tiles. Kimi's color variant already has a white
 mark and blue accent. No remote URLs are requested at runtime.
+
+### App marks (`apps/`)
+
+Fetched on 2026-10-22 from the same upstream `master` branch, for the public Apps analytics:
+
+| Local asset | Upstream SVG |
+| --- | --- |
+| `apps/claudecode-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/claudecode-color.svg |
+| `apps/codex-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/codex-color.svg |
+| `apps/opencode.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/opencode.svg |
+| `apps/kilocode.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/kilocode.svg |
+| `apps/roocode.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/roocode.svg |
+| `apps/openclaw-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/openclaw-color.svg |
+| `apps/hermesagent.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/hermesagent.svg |
+
+### Mono marks (`mono/`)
+
+Single-color (`currentColor`) marks for the white-on-gradient model announcement banners. Fetched on 2026-10-22 from
+`https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/<name>.svg`, one file per name:
+
+- `mono/alibaba.svg`
+- `mono/anthropic.svg`
+- `mono/baidu.svg`
+- `mono/bfl.svg`
+- `mono/bytedance.svg`
+- `mono/claude.svg`
+- `mono/deepseek.svg`
+- `mono/doubao.svg`
+- `mono/flux.svg`
+- `mono/gemini.svg`
+- `mono/google.svg`
+- `mono/grok.svg`
+- `mono/hunyuan.svg`
+- `mono/kimi.svg`
+- `mono/kling.svg`
+- `mono/ling.svg`
+- `mono/longcat.svg`
+- `mono/meta.svg`
+- `mono/minimax.svg`
+- `mono/mistral.svg`
+- `mono/moonshot.svg`
+- `mono/openai.svg`
+- `mono/pixverse.svg`
+- `mono/qwen.svg`
+- `mono/sakana.svg`
+- `mono/stepfun.svg`
+- `mono/tencent.svg`
+- `mono/wenxin.svg`
+- `mono/xai.svg`
+- `mono/xiaomimimo.svg`
+- `mono/zai.svg`

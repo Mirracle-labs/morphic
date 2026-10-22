@@ -49,7 +49,8 @@ async function loadCatalog(): Promise<CatalogModel[]> {
     db
       .select({
         modelId: s.requestLogs.resolvedModelId,
-        tokens: sql<number>`coalesce(sum(coalesce(${s.requestLogs.promptTokens},0) + coalesce(${s.requestLogs.completionTokens},0)),0)::bigint`,
+        // Tokens only count when a request succeeded; a failed call processed nothing.
+        tokens: sql<number>`coalesce(sum(coalesce(${s.requestLogs.promptTokens},0) + coalesce(${s.requestLogs.completionTokens},0)) filter (where ${s.requestLogs.status} = 'success'),0)::bigint`,
       })
       .from(s.requestLogs)
       .where(sql`${s.requestLogs.createdAt} > now() - interval '7 days'`)
