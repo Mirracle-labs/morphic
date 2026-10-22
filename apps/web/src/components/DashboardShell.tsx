@@ -180,7 +180,6 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           <BookOpen className="h-4 w-4 shrink-0 text-neutral-600" />
           <span suppressHydrationWarning>{locale === 'en' ? 'Guide' : 'Panduan'}</span>
         </Link>
-        {/* The top bar carries the language switch from md up; the drawer needs its own. */}
         <div className="md:hidden flex items-center justify-between px-3 py-2 text-sm text-neutral-700">
           <div className="flex items-center gap-3">
             <Globe className="h-4 w-4 shrink-0 text-neutral-600" />

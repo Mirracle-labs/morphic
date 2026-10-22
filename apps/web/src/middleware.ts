@@ -119,13 +119,65 @@ export function middleware(req: NextRequest) {
     );
   }
 
-  // 6. Security Headers on edge response
-  const response = NextResponse.next();
+  // 6. Geolocation & Currency Resolution (Decoupling Locale from Currency)
+  const isPrivateOrLocalIp = (ip: string): boolean => {
+    return (
+      ip === 'unknown' ||
+      ip === 'localhost' ||
+      ip === '::1' ||
+      ip === '127.0.0.1' ||
+      ip.startsWith('10.') ||
+      ip.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip) ||
+      ip.startsWith('fe80:') ||
+      ip.startsWith('fc00:')
+    );
+  };
+
+  const rawCountry =
+    req.headers.get('cf-ipcountry') ||
+    req.headers.get('x-vercel-ip-country') ||
+    req.headers.get('x-country-code');
+
+  const detectedCountry =
+    rawCountry && rawCountry !== 'XX' && rawCountry !== 'T1'
+      ? rawCountry.toUpperCase()
+      : isPrivateOrLocalIp(clientIp)
+        ? 'ID'
+        : 'US';
+
+  const cookieCurrency = req.cookies.get('morphic_currency')?.value;
+  const currency =
+    cookieCurrency === 'IDR' || cookieCurrency === 'USD'
+      ? cookieCurrency
+      : detectedCountry === 'ID'
+        ? 'IDR'
+        : 'USD';
+
+  // Pass detected metadata to downstream server components
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-morphic-country', detectedCountry);
+  requestHeaders.set('x-morphic-currency', currency);
+
+  // 7. Security Headers & Response setup
+  const response = NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.headers.set('x-morphic-country', detectedCountry);
+  response.headers.set('x-morphic-currency', currency);
 
-  // 7. Locale: English unless the visitor picked a language (morphic_lang cookie).
+  if (!cookieCurrency) {
+    response.cookies.set('morphic_currency', currency, {
+      path: '/',
+      maxAge: 31536000,
+      sameSite: 'lax',
+    });
+  }
 
   return response;
 }
