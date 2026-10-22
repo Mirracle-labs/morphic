@@ -26,6 +26,8 @@ export interface CompletionAuth {
   requestId: string;
   userId: string;
   apiKeyId: string;
+  /** Client app from attribution headers, for public Apps analytics. */
+  app?: string | null;
 }
 
 export interface StartCompletionInput {
@@ -242,7 +244,7 @@ type AttemptResult =
     };
 
 export async function startCompletion(input: StartCompletionInput): Promise<CompletionResult> {
-  const { requestId, userId, apiKeyId } = input.auth;
+  const { requestId, userId, apiKeyId, app } = input.auth;
   const startedAt = Date.now();
   const publicModelId = input.publicModelId;
   const wantsStream = input.wantsStream;
@@ -601,6 +603,7 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
   }): Promise<CompletionFailure> => {
     const settleRes = await settle({
       reservation,
+      app,
       userId,
       promptTokens,
       completionTokens: 0,
@@ -659,6 +662,7 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
     const status = metrics.status ?? 'success';
     const settleRes = await settle({
       reservation,
+      app,
       userId,
       promptTokens: metrics.promptTokens,
       completionTokens: metrics.completionTokens,

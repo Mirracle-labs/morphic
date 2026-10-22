@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AudioLines, Check, ChevronDown, Copy, FileText, Image as ImageIcon, SlidersHorizontal, Type, Video } from 'lucide-react';
 import { useTranslation } from '@/lib/i18n';
 import { GatewayProviderLogo, ModelProviderLogo } from '@/components/ProviderLogos';
+import { fmtIdrPer1m, fmtMultiplier } from '@/lib/billing-format';
 import type { CatalogModel } from '@/lib/model-catalog';
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 });
@@ -76,7 +77,7 @@ function CheckList({
         </label>
       ))}
       {items.length > 5 && (
-        <button type="button" onClick={() => setShowAll((v) => !v)} className={`pt-1 text-sm font-medium text-neutral-950 underline-offset-2 hover:underline rounded ${focusRing}`}>
+        <button type="button" onClick={() => setShowAll((v) => !v)} className={`pt-1 pointer-coarse:min-h-11 text-sm font-medium text-neutral-950 underline-offset-2 hover:underline rounded ${focusRing}`}>
           {showAll ? moreLabel[1] : moreLabel[0]}
         </button>
       )}
@@ -158,7 +159,7 @@ function ModelCell({ m, en }: { m: CatalogModel; en: boolean }) {
   const title = `${m.maker}: ${m.name}`;
   const price =
     m.price.unit === 'credits'
-      ? [`${compact.format(m.price.input)} ${en ? 'credits' : 'kredit'}/M`, `${compact.format(m.price.output)} ${en ? 'credits' : 'kredit'}/M`]
+      ? [`${fmtMultiplier(m.price.input, en)} · ${fmtIdrPer1m(m.price.input)}`, `${fmtMultiplier(m.price.output, en)} · ${fmtIdrPer1m(m.price.output)}`]
       : [range(m.price.input), range(m.price.output)];
 
   return (

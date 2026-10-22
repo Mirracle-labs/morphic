@@ -72,9 +72,9 @@ export function AdminShell({ user, children }: AdminShellProps) {
   }, [mobileOpen]);
 
   const sidebarContent = (
-    <div className="flex flex-col h-full justify-between">
-      {/* Top section: Brand + Nav */}
-      <div className="space-y-6">
+    <div className="flex flex-col h-full min-h-0 gap-4">
+      {/* Top section: Brand + Nav; the nav scrolls so the admin card never gets pushed off short screens */}
+      <div className="flex flex-col flex-1 min-h-0 gap-6">
         {/* Brand Header */}
         <div className="px-2 pt-1 pb-3 border-b border-neutral-100">
           <div className="flex items-center justify-between">
@@ -101,7 +101,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
         </div>
 
         {/* Navigation list */}
-        <nav className="space-y-1" aria-label={t.admin.adminMenu}>
+        <nav className="flex-1 min-h-0 overflow-y-auto space-y-1 -mx-1 px-1" aria-label={t.admin.adminMenu}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isNavActive(item.href, item.exact);
@@ -126,7 +126,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
       </div>
 
       {/* Bottom section: Logged in admin card */}
-      <div className="pt-4 border-t border-neutral-200/80">
+      <div className="shrink-0 pt-4 border-t border-neutral-200/80">
         <div className="p-3 rounded-2xl bg-neutral-50 border border-neutral-200/80 flex items-center justify-between">
           <div className="min-w-0 pr-2">
             <div className="text-xs font-bold text-neutral-950 truncate font-heading">{user.name || 'Admin'}</div>
@@ -197,7 +197,7 @@ export function AdminShell({ user, children }: AdminShellProps) {
             role="dialog"
             aria-modal="true"
             aria-label={t.admin.adminMenu}
-            className="absolute top-0 left-0 h-full w-72 bg-white border-r border-neutral-200 shadow-2xl p-5 flex flex-col z-10 animate-in slide-in-from-left duration-200"
+            className="absolute top-0 left-0 h-full w-72 bg-white border-r border-neutral-200 shadow-2xl p-5 flex flex-col min-h-0 z-10 animate-in slide-in-from-left duration-200"
           >
             <div className="flex items-center justify-between pb-3 mb-2 border-b border-neutral-100">
               <span className="font-mono text-xs font-bold text-neutral-500 uppercase tracking-wider">

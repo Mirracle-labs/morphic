@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Bell, CheckCheck, X } from 'lucide-react';
 import { formatCredits } from '@/lib/utils';
 import type { NotificationItem } from '@/lib/notifications';
+import { makerByPrefix, makerFromId } from '@/lib/model-maker';
 import { getNotificationsAction } from '@/lib/actions';
 import { useLocalStorage } from '@/lib/use-local-storage';
 
@@ -18,13 +20,95 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
 const money = (cents: number, currency: string) =>
   currency === 'USD' ? `$${(cents / 100).toFixed(2)}` : `Rp ${cents.toLocaleString('id-ID')}`;
 
+// Model announcement banners. Per maker: the company mark (top), the model family mark (centre) and a
+// three-stop gradient from the brand's own palette (deep, main, light). Marks are LobeHub mono SVGs
+// painted white through a CSS mask, so every logo reads as a clean transparent silhouette.
+type Banner = { top: string | null; mark: string | null; colors: [string, string, string] };
+const BANNERS: Record<string, Banner> = {
+  OpenAI: { top: 'openai', mark: 'openai', colors: ['#06281f', '#0d8a6a', '#7ee8c6'] },
+  Anthropic: { top: 'anthropic', mark: 'claude', colors: ['#5a1d0c', '#c9603d', '#f6b48a'] },
+  Google: { top: 'google', mark: 'gemini', colors: ['#0b1f5c', '#2f6fe4', '#8ec5ff'] },
+  DeepSeek: { top: 'deepseek', mark: 'deepseek', colors: ['#120f5c', '#3d5afe', '#8fb4ff'] },
+  Qwen: { top: 'qwen', mark: 'qwen', colors: ['#2a0a5e', '#5b4ee8', '#c2b5ff'] },
+  Alibaba: { top: 'alibaba', mark: 'alibaba', colors: ['#5c1a05', '#f05a00', '#ffb36b'] },
+  MoonshotAI: { top: 'moonshot', mark: 'kimi', colors: ['#050b24', '#1648e8', '#6fd0ff'] },
+  xAI: { top: 'xai', mark: 'grok', colors: ['#050505', '#2e2e33', '#8b8b94'] },
+  'Z.ai': { top: 'zai', mark: 'zai', colors: ['#081a4d', '#2160f0', '#5fe3f5'] },
+  MiniMax: { top: 'minimax', mark: 'minimax', colors: ['#7a0a1c', '#e0213f', '#ff9a3c'] },
+  Mistral: { top: 'mistral', mark: 'mistral', colors: ['#5c1505', '#f04d0c', '#ffd23f'] },
+  Meta: { top: 'meta', mark: 'meta', colors: ['#120f3d', '#5a33e0', '#8fb8ff'] },
+  ByteDance: { top: 'bytedance', mark: 'doubao', colors: ['#071f4d', '#2f7af0', '#5ee6d3'] },
+  Tencent: { top: 'tencent', mark: 'hunyuan', colors: ['#06245c', '#0a56d6', '#4cc3ff'] },
+  Xiaomi: { top: 'xiaomimimo', mark: 'xiaomimimo', colors: ['#5c1a05', '#f26100', '#ffbf7a'] },
+  StepFun: { top: 'stepfun', mark: 'stepfun', colors: ['#0b1433', '#1f5ae0', '#3fd6f0'] },
+  inclusionAI: { top: 'ling', mark: 'ling', colors: ['#0a2a7a', '#1f6ff0', '#7cc0ff'] },
+  Meituan: { top: 'longcat', mark: 'longcat', colors: ['#5c3305', '#e8930a', '#ffe08a'] },
+  Baidu: { top: 'baidu', mark: 'wenxin', colors: ['#0f1a52', '#2a35d9', '#8a93ff'] },
+  'Black Forest Labs': { top: 'bfl', mark: 'flux', colors: ['#06163d', '#1747c9', '#2fd3f0'] },
+  KlingAI: { top: 'kling', mark: 'kling', colors: ['#06301a', '#139a48', '#a6e84a'] },
+  PixVerse: { top: 'pixverse', mark: 'pixverse', colors: ['#3b0a52', '#a3239f', '#ff7ac0'] },
+  'Sakana AI': { top: 'sakana', mark: 'sakana', colors: ['#3d0808', '#d12a2a', '#ffa3a3'] },
+};
+const FALLBACK: Banner = { top: null, mark: null, colors: ['#111114', '#3a3a42', '#8b8b94'] };
+
+// Fine film grain, as in the reference banners: inline SVG turbulence, no image request.
+const GRAIN =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+
+function MonoMark({ name, className }: { name: string; className: string }) {
+  const url = `url(/logos/mono/${name}.svg)`;
+  return (
+    <span
+      className={`inline-block shrink-0 bg-white ${className}`}
+      style={{ maskImage: url, WebkitMaskImage: url, maskSize: 'contain', WebkitMaskSize: 'contain', maskRepeat: 'no-repeat', WebkitMaskRepeat: 'no-repeat', maskPosition: 'center', WebkitMaskPosition: 'center' }}
+    />
+  );
+}
+
+/** "Morphic | Maker" announcement card for a newly live model. Pure CSS, no generated image. */
+function ModelBanner({ modelId, name }: { modelId: string; name: string }) {
+  // Catalog slugs carry the maker as a prefix; older ids ("deepseek-v4") fall back to keyword matching.
+  const keyword = makerFromId(modelId);
+  const makerName = makerByPrefix(modelId)?.maker ?? (keyword === 'Other' ? null : { Moonshot: 'MoonshotAI', Zhipu: 'Z.ai' }[keyword] ?? keyword);
+  const mk = makerName ? { maker: makerName } : null;
+  const b = (mk && BANNERS[mk.maker]) || FALLBACK;
+  const [deep, main, light] = b.colors;
+  return (
+    <div
+      aria-hidden="true"
+      className="relative mt-3 aspect-[9/4] w-full overflow-hidden rounded-2xl text-white"
+      style={{
+        background: `radial-gradient(55% 75% at 12% 15%, ${light} 0%, transparent 65%), radial-gradient(60% 80% at 90% 95%, ${light} 0%, transparent 60%), radial-gradient(70% 90% at 55% 35%, ${deep} 0%, transparent 70%), linear-gradient(135deg, ${main} 0%, ${deep} 55%, ${main} 100%)`,
+      }}
+    >
+      <div className="pointer-events-none absolute inset-0 opacity-30 mix-blend-overlay" style={{ backgroundImage: GRAIN }} />
+      <div className="absolute inset-x-0 top-[12%] flex items-center justify-center gap-3 sm:gap-4">
+        <Image src="/morphic-brand-clean.png" alt="" width={110} height={26} className="h-4 sm:h-5 w-auto brightness-0 invert" />
+        {mk && (
+          <>
+            <span className="h-4 sm:h-5 w-px bg-white/50" />
+            <span className="flex items-center gap-1.5 text-sm sm:text-base font-bold tracking-tight">
+              {b.top && <MonoMark name={b.top} className="h-4 w-4 sm:h-5 sm:w-5" />}
+              {mk.maker}
+            </span>
+          </>
+        )}
+      </div>
+      <div className="absolute inset-0 flex items-center justify-center gap-3 sm:gap-5 px-6 pt-6 sm:pt-8 [text-shadow:0_1px_12px_rgba(0,0,0,.25)]">
+        {b.mark && <MonoMark name={b.mark} className="h-10 w-10 sm:h-14 sm:w-14" />}
+        <span className="line-clamp-2 text-2xl sm:text-4xl font-medium tracking-tight leading-tight">{name}</span>
+      </div>
+    </div>
+  );
+}
+
 function content(n: NotificationItem, en: boolean): { title: string; body: string; link?: { href: string; label: string } } {
   switch (n.type) {
     case 'model_new':
       return {
         title: `${en ? 'New model available' : 'Model baru tersedia'}: ${n.name}`,
         body: n.description ?? (en ? `${n.modelId} is now live on the gateway.` : `${n.modelId} sudah aktif di gateway.`),
-        link: { href: '/models', label: en ? 'View in catalog' : 'Lihat di katalog' },
+        link: { href: `/models/${n.modelId}`, label: en ? 'View model detail' : 'Lihat detail model' },
       };
     case 'model_retired':
       return {
@@ -201,7 +285,8 @@ export function NotificationsDrawer({ items: initial, en }: { items: Notificatio
                         {isUnread(n) && <span className="h-2 w-2 shrink-0 rounded-full bg-red-600" aria-label={en ? 'Unread' : 'Belum dibaca'} />}
                         {c.title}
                       </h3>
-                      <p className="mt-1.5 whitespace-pre-line text-sm text-neutral-800">{c.body}</p>
+                      {n.type === 'model_new' && <ModelBanner modelId={n.modelId} name={n.name} />}
+                      <p className={`${n.type === 'model_new' ? 'mt-3' : 'mt-1.5'} whitespace-pre-line text-sm text-neutral-800`}>{c.body}</p>
                       {c.link &&
                         (external ? (
                           <a href={c.link.href} target="_blank" rel="noopener noreferrer" className={`mt-3 inline-flex h-9 items-center rounded-lg border border-neutral-300 px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100 ${focusRing}`}>

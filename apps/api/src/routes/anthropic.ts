@@ -14,6 +14,7 @@ import {
   type AnthropicMessagesRequest,
 } from '@morphic/shared/anthropic';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
+import { appFromRequest } from '../lib/app-attribution';
 import {
   buildPromptText,
   retryAfterSeconds,
@@ -171,7 +172,7 @@ anthropic.post('/messages', async (c) => {
 
   try {
     const result = await startCompletion({
-      auth: { requestId, userId, apiKeyId: keyId },
+      auth: { requestId, userId, apiKeyId: keyId, app: appFromRequest(c.req.raw.headers) },
       publicModelId: resolved.model,
       wantsStream,
       signal: c.req.raw.signal,

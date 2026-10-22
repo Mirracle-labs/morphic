@@ -1,9 +1,11 @@
 import { randomInt } from 'node:crypto';
-import { and, eq, gt, inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { db, withTransaction } from './index.ts';
 import * as s from './schema.ts';
 import {
   estimateReservation,
+  RAW_TOKEN_PRICING,
+  TOKEN_PACK_HOURS,
   tokensToCredits,
   type ModelPricing,
 } from '@morphic/shared/credits';
@@ -79,17 +81,52 @@ async function writeBalanceLedger(
     });
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+interface Source {
+  sourceType: 'balance' | 'entitlement';
+  sourceId: string | null;
+  /** Reserve amount in this source's unit: raw tokens for an unlimited pass, credits otherwise. */
+  estimate: number;
+}
+
 /**
- * Pick funding source: active model-matched entitlement first, then balance.
- * Returns null when nothing can cover the estimate.
+ * Pick and lock the funding source, in order:
+ *  1. unlimited pass for this model (raw tokens against today's fair-use cap; refilled daily)
+ *  2. token pack or model allowance (credits, multiplier applies), soonest expiry first
+ *  3. balance
+ * Over the fair-use cap falls through to 2/3, so a heavy day is billed, never blocked.
  */
-async function pickSource(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  userId: string,
-  modelId: string,
-  estimatedCredits: number,
-): Promise<{ sourceType: 'balance' | 'entitlement'; sourceId: string | null } | null> {
+async function pickSource(tx: Tx, userId: string, modelId: string, est: { credits: number; raw: number }): Promise<Source | null> {
   const now = new Date();
+  const [pass] = await tx
+    .select()
+    .from(s.entitlements)
+    .where(
+      and(
+        eq(s.entitlements.userId, userId),
+        eq(s.entitlements.status, 'active'),
+        eq(s.entitlements.unlimited, true),
+        eq(s.entitlements.modelId, modelId),
+        gt(s.entitlements.expiresAt, now),
+      ),
+    )
+    .orderBy(s.entitlements.expiresAt)
+    .limit(1)
+    .for('update');
+  if (pass) {
+    let remaining = pass.remaining;
+    if (pass.resetsAt && pass.resetsAt <= now) {
+      const days = Math.floor((now.getTime() - pass.resetsAt.getTime()) / 86_400_000) + 1;
+      remaining = pass.allowance;
+      await tx
+        .update(s.entitlements)
+        .set({ remaining, resetsAt: new Date(pass.resetsAt.getTime() + days * 86_400_000) })
+        .where(eq(s.entitlements.id, pass.id));
+    }
+    if (remaining >= est.raw) return { sourceType: 'entitlement', sourceId: pass.id, estimate: est.raw };
+  }
+
   const [ent] = await tx
     .select()
     .from(s.entitlements)
@@ -97,15 +134,16 @@ async function pickSource(
       and(
         eq(s.entitlements.userId, userId),
         eq(s.entitlements.status, 'active'),
-        eq(s.entitlements.modelId, modelId),
+        eq(s.entitlements.unlimited, false),
+        or(eq(s.entitlements.modelId, modelId), isNull(s.entitlements.modelId)),
         gt(s.entitlements.expiresAt, now),
-        gt(s.entitlements.remaining, 0),
+        gte(s.entitlements.remaining, est.credits),
       ),
     )
     .orderBy(s.entitlements.expiresAt)
-    .limit(1);
-
-  if (ent) return { sourceType: 'entitlement', sourceId: ent.id };
+    .limit(1)
+    .for('update');
+  if (ent) return { sourceType: 'entitlement', sourceId: ent.id, estimate: est.credits };
 
   const [bal] = await tx
     .select()
@@ -113,8 +151,8 @@ async function pickSource(
     .where(eq(s.balances.userId, userId))
     .for('update');
 
-  if (bal && bal.credits >= estimatedCredits) {
-    return { sourceType: 'balance', sourceId: null };
+  if (bal && bal.credits >= est.credits) {
+    return { sourceType: 'balance', sourceId: null, estimate: est.credits };
   }
   return null;
 }
@@ -127,41 +165,38 @@ export async function reserve(input: {
   requestedMaxTokens: number | null;
   requestId: string;
 }): Promise<Reservation> {
-  const estimatedCredits = estimateReservation({
+  const base = {
     promptTokens: input.promptTokens,
     requestedMaxTokens: input.requestedMaxTokens,
     modelContextLength: input.model.contextLength,
     hardReserveCap: hardReserveCap(),
-    pricing: input.model.pricing,
-  });
+  };
+  const est = {
+    credits: estimateReservation({ ...base, pricing: input.model.pricing }),
+    raw: estimateReservation({ ...base, pricing: RAW_TOKEN_PRICING }),
+  };
 
   return withTransaction(async (tx) => {
-    const source = await pickSource(tx, input.userId, input.model.id, estimatedCredits);
+    const source = await pickSource(tx, input.userId, input.model.id, est);
     if (!source) {
       throw new InsufficientCreditsError(
-        `insufficient credits: need >= ${estimatedCredits} reserved`,
+        `insufficient credits: need >= ${est.credits} reserved`,
       );
     }
+    const estimatedCredits = source.estimate;
 
     if (source.sourceType === 'entitlement' && source.sourceId) {
-      const [ent] = await tx
-        .select()
-        .from(s.entitlements)
-        .where(eq(s.entitlements.id, source.sourceId))
-        .for('update');
-      if (!ent || ent.remaining <= 0) {
-        throw new InsufficientCreditsError('entitlement exhausted');
-      }
+      // row locked by pickSource and verified to cover the estimate
       await tx
         .update(s.entitlements)
         .set({ remaining: sql`${s.entitlements.remaining} - ${estimatedCredits}` })
-        .where(eq(s.entitlements.id, ent.id));
+        .where(eq(s.entitlements.id, source.sourceId));
       await tx.insert(s.creditLedger).values({
         userId: input.userId,
         entryType: 'reservation',
         amount: -estimatedCredits,
         sourceType: 'entitlement',
-        sourceId: ent.id,
+        sourceId: source.sourceId,
         reference: input.requestId,
       });
     } else {
@@ -213,15 +248,9 @@ export async function settle(input: {
   error?: string | null;
   latencyMs?: number | null;
   streamed?: boolean;
+  app?: string | null;
 }): Promise<{ actualCredits: number; refunded: number; usageRecordId: string; upstreamCostCredits: number | null }> {
   const chargeable = input.status !== 'error';
-  const actualCredits = chargeable
-    ? tokensToCredits(input.promptTokens, input.pricing.inputCreditsPer1m) +
-      tokensToCredits(input.completionTokens, input.pricing.outputCreditsPer1m)
-    : 0;
-  // actual is clamped to estimate: settlement never charges more than reserved
-  const charged = Math.min(actualCredits, input.reservation.estimatedCredits);
-  const refunded = input.reservation.estimatedCredits - charged;
   const up = input.upstreamPricing;
   const upstreamCostCredits =
     chargeable && up
@@ -239,6 +268,25 @@ export async function settle(input: {
       throw new Error(`reservation ${input.reservation.id} not in reserved state`);
     }
 
+    // An unlimited pass is metered in raw tokens against its fair-use cap and was paid upfront.
+    const [pass] =
+      res.sourceType === 'entitlement' && res.sourceId
+        ? await tx
+            .select({ id: s.entitlements.id })
+            .from(s.entitlements)
+            .where(and(eq(s.entitlements.id, res.sourceId), eq(s.entitlements.unlimited, true)))
+        : [];
+    const pricing = pass ? RAW_TOKEN_PRICING : input.pricing;
+    const actual =
+      chargeable
+        ? tokensToCredits(input.promptTokens, pricing.inputCreditsPer1m) +
+          tokensToCredits(input.completionTokens, pricing.outputCreditsPer1m)
+        : 0;
+    // actual is clamped to estimate: settlement never charges more than reserved
+    const charged = Math.min(actual, res.estimatedCredits);
+    const refunded = res.estimatedCredits - charged;
+    const actualCredits = pass ? 0 : charged;
+
     // usage record
     const [usage] = await tx
       .insert(s.usageRecords)
@@ -250,12 +298,13 @@ export async function settle(input: {
         promptTokens: input.promptTokens,
         completionTokens: input.completionTokens,
         totalTokens: input.promptTokens + input.completionTokens,
-        creditsConsumed: charged,
+        creditsConsumed: actualCredits,
         upstreamCostCredits,
         latencyMs: input.latencyMs ?? null,
         status: input.status,
         error: input.error ?? null,
         streamed: input.streamed ?? false,
+        app: input.app ?? null,
       })
       .returning();
 
@@ -298,7 +347,7 @@ export async function settle(input: {
       })
       .where(eq(s.reservations.id, res.id));
 
-    return { actualCredits: charged, refunded, usageRecordId: usage!.id, upstreamCostCredits };
+    return { actualCredits, refunded, usageRecordId: usage!.id, upstreamCostCredits };
   });
 }
 
@@ -394,6 +443,8 @@ export async function grantEntitlement(
     durationHours?: number | null;
     source: 'purchase' | 'redeem' | 'admin' | 'promotion';
     packageId?: string | null;
+    /** Daily fair-use pass: `allowance` raw tokens per day, refilled every 24h. */
+    unlimited?: boolean;
   },
   outerTx?: Parameters<Parameters<typeof db.transaction>[0]>[0],
 ): Promise<string> {
@@ -406,11 +457,48 @@ export async function grantEntitlement(
       modelId: input.modelId ?? null,
       allowance: input.allowance,
       remaining: input.allowance,
+      unlimited: input.unlimited ?? false,
+      resetsAt: input.unlimited ? new Date(Date.now() + 86_400_000) : null,
       source: input.source,
       expiresAt: new Date(Date.now() + (input.durationHours ?? 24) * 3_600_000),
     })
     .returning();
   return ent!.id;
+}
+
+/**
+ * Deliver a bought or redeemed package by kind: balance → wallet credits; tokens → any-model
+ * token pack (default 30 days); unlimited → daily fair-use pass on its model.
+ * `amount` is the package's creditAllowance as snapshotted at purchase.
+ */
+export async function grantPackage(
+  tx: Tx,
+  input: {
+    userId: string;
+    pkg: Pick<typeof s.packages.$inferSelect, 'id' | 'kind' | 'modelId' | 'durationHours'>;
+    amount: number;
+    source: 'purchase' | 'redeem';
+    reference: string;
+  },
+): Promise<void> {
+  const { pkg } = input;
+  if (pkg.kind === 'balance') {
+    await grantCredits({ userId: input.userId, amount: input.amount, entryType: input.source, reference: input.reference }, tx);
+    return;
+  }
+  if (pkg.kind === 'unlimited' && !pkg.modelId) throw new Error(`unlimited package ${pkg.id} has no model`);
+  await grantEntitlement(
+    {
+      userId: input.userId,
+      allowance: input.amount,
+      modelId: pkg.kind === 'unlimited' ? pkg.modelId : null,
+      durationHours: pkg.durationHours ?? (pkg.kind === 'tokens' ? TOKEN_PACK_HOURS : 24),
+      unlimited: pkg.kind === 'unlimited',
+      source: input.source,
+      packageId: pkg.id,
+    },
+    tx,
+  );
 }
 
 /**
@@ -507,30 +595,14 @@ export async function processPaymentSuccess(
         throw new Error(`Package ${locked.packageId} not found for payment ${locked.id}`);
       }
 
-      // Step 4: Grant model-specific entitlement or standard credit balance based on snapshot locked.credits
-      if (pkg.modelId) {
-        await grantEntitlement(
-          {
-            userId: locked.userId,
-            allowance: locked.credits, // Use snapshot locked.credits at purchase time
-            modelId: pkg.modelId,
-            durationHours: pkg.durationHours,
-            source: 'purchase',
-            packageId: pkg.id,
-          },
-          tx,
-        );
-      } else {
-        await grantCredits(
-          {
-            userId: locked.userId,
-            amount: locked.credits, // Use snapshot locked.credits at purchase time
-            entryType: 'purchase',
-            reference: `payment:${locked.id}`,
-          },
-          tx,
-        );
-      }
+      // Step 4: Deliver by package kind, using the locked.credits snapshot from purchase time
+      await grantPackage(tx, {
+        userId: locked.userId,
+        pkg,
+        amount: locked.credits,
+        source: 'purchase',
+        reference: `payment:${locked.id}`,
+      });
     } else {
       // Step 5: Grant standard credit balance directly using payment locked.credits snapshot
       await grantCredits(

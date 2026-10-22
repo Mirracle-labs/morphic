@@ -172,11 +172,19 @@ async function proxyRequest(req: NextRequest) {
   }
 
   // 5. Proxy Request to Backend Target URL
-  const targetBase = (
+  const defaultTarget = `http://localhost:${process.env.API_PORT || 8787}`;
+  let configuredTarget =
     process.env.INTERNAL_API_URL ||
-    process.env.NEXT_PUBLIC_API_URL ||
-    'http://localhost:8787'
-  ).replace(/\/+$/, '');
+    (process.env.NODE_ENV === 'production' ? process.env.NEXT_PUBLIC_API_URL : null) ||
+    defaultTarget;
+
+  configuredTarget = configuredTarget.replace(/\/+$/, '');
+
+  // Guard against circular proxy loop if target is accidentally set to the web app itself
+  const targetBase =
+    configuredTarget === req.nextUrl.origin
+      ? defaultTarget
+      : configuredTarget;
 
   const targetUrl = `${targetBase}${rawPath}${url.search}`;
 

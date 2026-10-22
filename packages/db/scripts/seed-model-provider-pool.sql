@@ -18,7 +18,7 @@
 -- ----------------------------------------------------------------------------
 -- ASSUMPTIONS
 -- ----------------------------------------------------------------------------
--- 1. Migration 0014_smooth_mister_fear.sql (table `model_provider_pool`) has
+-- 1. Migration 0017_smooth_mister_fear.sql (table `model_provider_pool`) has
 --    already been applied to this database.
 -- 2. Only models with status IN ('active', 'deprecated') are seeded. Models
 --    with status 'inactive' are intentionally skipped (they are not routable;

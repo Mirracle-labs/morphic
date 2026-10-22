@@ -1,17 +1,18 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useTranslation } from '@/lib/i18n';
-import { formatCredits } from '@/lib/utils';
+import { fmtTokens } from '@/lib/billing-format';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { SignOutButton } from '@/app/dashboard/sign-out';
 import GitHubIcon from '@/components/icons/GitHubIcon';
 import LinkedInIcon from '@/components/icons/LinkedInIcon';
 import { SUPPORT_EMAIL } from '@/lib/contact';
 import { NotificationsDrawer } from '@/components/NotificationsDrawer';
+import NavMenu, { analyticsItems } from '@/components/NavMenu';
 import { useLocalStorage } from '@/lib/use-local-storage';
 import type { NotificationItem } from '@/lib/notifications';
 import {
@@ -179,7 +180,6 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           <BookOpen className="h-4 w-4 shrink-0 text-neutral-600" />
           <span suppressHydrationWarning>{locale === 'en' ? 'Guide' : 'Panduan'}</span>
         </Link>
-        {/* The top bar carries the language switch from md up; the drawer needs its own. */}
         <div className="md:hidden flex items-center justify-between px-3 py-2 text-sm text-neutral-700">
           <div className="flex items-center gap-3">
             <Globe className="h-4 w-4 shrink-0 text-neutral-600" />
@@ -277,13 +277,22 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
               { href: '/docs', label: t.nav.docs },
               { href: '/about', label: locale === 'en' ? 'About Us' : 'Tentang Kami' },
             ].map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className={`inline-flex items-center px-3 py-2 rounded-lg text-sm text-neutral-800 hover:text-neutral-950 hover:bg-white transition-colors ${focusRing}`}
-              >
-                <span suppressHydrationWarning>{l.label}</span>
-              </Link>
+              <Fragment key={l.href}>
+                <Link
+                  href={l.href}
+                  className={`inline-flex items-center px-3 py-2 rounded-lg text-sm text-neutral-800 hover:text-neutral-950 hover:bg-white transition-colors ${focusRing}`}
+                >
+                  <span suppressHydrationWarning>{l.label}</span>
+                </Link>
+                {l.href === '/models' && (
+                  <NavMenu
+                    items={analyticsItems(locale === 'en')}
+                    buttonClassName={`inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm text-neutral-800 hover:text-neutral-950 hover:bg-white transition-colors cursor-pointer ${focusRing}`}
+                  >
+                    <span suppressHydrationWarning>{t.nav.analytics}</span>
+                  </NavMenu>
+                )}
+              </Fragment>
             ))}
           </nav>
           <Link
@@ -291,10 +300,7 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
             className={`inline-flex items-center gap-2 h-9 pl-3 pr-1 rounded-full bg-white border border-neutral-200 hover:border-neutral-300 transition-colors ${focusRing}`}
           >
             <span className="text-sm font-mono font-semibold text-neutral-950 tabular-nums">
-              {formatCredits(balance)}
-              <span suppressHydrationWarning className="ml-1 text-xs font-sans font-normal text-neutral-600">
-                {t.dashboard.creditsUnit}
-              </span>
+              <span suppressHydrationWarning>{fmtTokens(balance, locale === 'en')}</span>
             </span>
             <span
               suppressHydrationWarning

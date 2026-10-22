@@ -1,7 +1,7 @@
 /**
  * Pooling Phase 1B: schema + migration contract for `model_provider_pool`.
  *
- * Prerequisite: migration 0014_smooth_mister_fear.sql is applied to the database
+ * Prerequisite: migration 0017_smooth_mister_fear.sql is applied to the database
  * pointed at by `.env.test`. The migration test below fails with an explicit
  * message if the table is missing, so a fresh checkout is easy to diagnose.
  *
@@ -118,7 +118,7 @@ test('1B: migration created model_provider_pool with the required shape', async 
   assert.equal(
     await tableExists(),
     true,
-    'model_provider_pool is missing — apply migration 0014 (pnpm --filter @morphic/db migrate) to the test DB',
+    'model_provider_pool is missing — apply migration 0017 (pnpm --filter @morphic/db migrate) to the test DB',
   );
 
   const columns = await db.execute(sql`

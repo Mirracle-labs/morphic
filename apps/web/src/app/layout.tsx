@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { cookies, headers } from 'next/headers';
 import NavigationProgress from '@/components/NavigationProgress';
 import { LanguageProvider, Locale } from '@/lib/i18n';
+import { CurrencyProvider, type Currency } from '@/lib/currency';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -53,10 +54,19 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const cookieStore = await cookies();
+  const headerStore = await headers();
   const cookieVal = cookieStore.get('morphic_lang')?.value as Locale | undefined;
 
   // English by default; Indonesian only when the visitor chose it with the language toggle.
   const initialLocale: Locale = cookieVal === 'id' ? 'id' : 'en';
+
+  const cookieCurrency = cookieStore.get('morphic_currency')?.value as Currency | undefined;
+  const headerCurrency = headerStore.get('x-morphic-currency') as Currency | undefined;
+  const initialCurrency: Currency =
+    cookieCurrency === 'IDR' || cookieCurrency === 'USD'
+      ? cookieCurrency
+      : (headerCurrency === 'IDR' || headerCurrency === 'USD' ? headerCurrency : 'IDR');
+  const detectedCountry = headerStore.get('x-morphic-country') || null;
 
   return (
     <html lang={initialLocale} className="scroll-smooth" suppressHydrationWarning>
@@ -71,7 +81,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       </head>
       <body className="bg-[#fafafa] text-neutral-900 antialiased selection:bg-neutral-900 selection:text-white font-body min-h-screen">
         <NavigationProgress />
-        <LanguageProvider initialLocale={initialLocale}>{children}</LanguageProvider>
+        <LanguageProvider initialLocale={initialLocale}>
+          <CurrencyProvider initialCurrency={initialCurrency} detectedCountry={detectedCountry}>
+            {children}
+          </CurrencyProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

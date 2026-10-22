@@ -156,11 +156,11 @@ export const models = pgTable(
     description: text('description'),
     contextLength: integer('context_length').notNull(),
     capabilities: jsonb('capabilities').$type<string[]>().notNull().default([]),
-    inputCreditsPer1m: integer('input_credits_per_1m').notNull(),
-    outputCreditsPer1m: integer('output_credits_per_1m').notNull(),
+    inputCreditsPer1m: bigint('input_credits_per_1m', { mode: 'number' }).notNull(),
+    outputCreditsPer1m: bigint('output_credits_per_1m', { mode: 'number' }).notNull(),
     // Upstream price in CREDITS per 1M tokens (same unit as the sell price above), for margin tracking.
-    providerCostInputPer1m: integer('provider_cost_input_per_1m'),
-    providerCostOutputPer1m: integer('provider_cost_output_per_1m'),
+    providerCostInputPer1m: bigint('provider_cost_input_per_1m', { mode: 'number' }),
+    providerCostOutputPer1m: bigint('provider_cost_output_per_1m', { mode: 'number' }),
     status: text('status', { enum: ['active', 'inactive', 'deprecated'] }).notNull().default('active'),
     replacementModelAlias: text('replacement_model_alias'),
     // DEPRECATED (Pooling Phase 1B). Legacy single-fallback wiring, kept for one transition
@@ -340,6 +340,9 @@ export const packages = pgTable('packages', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull().unique(),
   description: text('description'),
+  // balance: credits added to the wallet. tokens: any-model token pack (credits, multiplier applies).
+  // unlimited: one model, creditAllowance = raw tokens per day (fair use), no multiplier.
+  kind: text('kind', { enum: ['balance', 'tokens', 'unlimited'] }).notNull().default('balance'),
   creditAllowance: bigint('credit_allowance', { mode: 'number' }).notNull(),
   modelId: uuid('model_id').references(() => models.id, { onDelete: 'set null' }),
   durationHours: integer('duration_hours'),
@@ -362,6 +365,9 @@ export const entitlements = pgTable(
     modelId: uuid('model_id').references(() => models.id, { onDelete: 'set null' }),
     allowance: bigint('allowance', { mode: 'number' }).notNull(),
     remaining: bigint('remaining', { mode: 'number' }).notNull(),
+    // Unlimited pass: `remaining` is today's fair-use tokens, refilled to `allowance` at `resetsAt`.
+    unlimited: boolean('unlimited').notNull().default(false),
+    resetsAt: timestamp('resets_at', { withTimezone: true }),
     source: text('source', { enum: ['purchase', 'redeem', 'admin', 'promotion'] }).notNull(),
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -399,9 +405,13 @@ export const usageRecords = pgTable(
     status: text('status', { enum: ['success', 'error', 'partial'] }).notNull(),
     error: text('error'),
     streamed: boolean('streamed').notNull().default(false),
+    // Client app that sent the request (X-Title, HTTP-Referer or a known User-Agent); null when unknown.
+    app: text('app'),
     createdAt: now(),
   },
-  (t) => [index('usage_user_idx').on(t.userId), index('usage_model_idx').on(t.modelId)],
+  // (user_id, created_at): the dashboard's Logs/Cost/Usage reads filter by user and a time range
+  // and sort newest first; it also serves plain user_id lookups, so it replaces usage_user_idx.
+  (t) => [index('usage_user_created_idx').on(t.userId, t.createdAt), index('usage_model_idx').on(t.modelId)],
 );
 
 // ── Payments ──────────────────────────────────────────

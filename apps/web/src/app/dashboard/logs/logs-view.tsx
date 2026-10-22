@@ -270,7 +270,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => handleDateFilterChange('all')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   dateFilter === 'all'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -281,7 +281,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => handleDateFilterChange('today')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   dateFilter === 'today'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -292,7 +292,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => handleDateFilterChange('7d')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   dateFilter === '7d'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -303,7 +303,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => handleDateFilterChange('30d')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   dateFilter === '30d'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -314,7 +314,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => handleDateFilterChange('custom')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 flex items-center gap-1 ${
                   dateFilter === 'custom'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -387,7 +387,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => setStatusFilter('all')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   statusFilter === 'all'
                     ? 'bg-white text-neutral-950 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-neutral-900'
@@ -398,7 +398,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => setStatusFilter('success')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   statusFilter === 'success'
                     ? 'bg-white text-emerald-700 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-emerald-700'
@@ -409,7 +409,7 @@ export function LogsView({ total, recent }: LogsViewProps) {
               <button
                 type="button"
                 onClick={() => setStatusFilter('error')}
-                className={`px-2.5 py-1 rounded-lg cursor-pointer transition-all duration-150 active:scale-95 ${
+                className={`px-2.5 py-1 rounded-lg cursor-pointer pointer-coarse:min-h-11 transition-all duration-150 active:scale-95 ${
                   statusFilter === 'error'
                     ? 'bg-white text-rose-700 shadow-2xs font-bold'
                     : 'text-neutral-500 hover:text-rose-700'

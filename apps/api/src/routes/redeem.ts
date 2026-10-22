@@ -3,7 +3,7 @@ import { db, schema as s } from '@morphic/db';
 import { eq, and, or, sql, lt, isNull } from 'drizzle-orm';
 import { sessionAuth, denyKeyDerivedSession } from '../middleware/session-auth';
 import { sessionRateLimit } from '../middleware/session-ratelimit';
-import { grantCredits, grantEntitlement } from '@morphic/db/billing';
+import { grantCredits, grantEntitlement, grantPackage } from '@morphic/db/billing';
 
 class RedeemError extends Error {
   constructor(public reason: 'code_fully_redeemed' | 'reward_unavailable') {
@@ -120,21 +120,7 @@ redeem.post('/', async (c) => {
           .limit(1);
         if (!pkg) throw new RedeemError('reward_unavailable');
 
-        if (pkg.modelId) {
-          await grantEntitlement(
-            {
-              userId,
-              allowance: pkg.creditAllowance,
-              modelId: pkg.modelId,
-              durationHours: pkg.durationHours,
-              source: 'redeem',
-              packageId: pkg.id,
-            },
-            tx,
-          );
-        } else {
-          await grantCredits({ userId, amount: pkg.creditAllowance, entryType: 'redeem', reference }, tx);
-        }
+        await grantPackage(tx, { userId, pkg, amount: pkg.creditAllowance, source: 'redeem', reference });
         return { type: 'package', credits: pkg.creditAllowance, package: { id: pkg.id, name: pkg.name } };
       }
 

@@ -3,18 +3,13 @@
 import { useState, useEffect } from 'react';
 import { downloadCsv } from '@/lib/csv';
 import { useTranslation } from '@/lib/i18n';
-import { formatCredits, cn } from '@/lib/utils';
-import { Zap, CreditCard, Clock, Wallet, QrCode, Coins, Sparkles, Download, Loader2, FileText, ArrowRight } from 'lucide-react';
-import {
-  ModelProviderLogo,
-  ClaudeLogo,
-  OpenAILogo,
-  DeepSeekLogo,
-  QwenLogo,
-  KimiLogo,
-} from '@/components/ProviderLogos';
+import Link from 'next/link';
+import { cn } from '@/lib/utils';
+import { Download, Loader2, FileText } from 'lucide-react';
+import { IDR_PER_USD, TOKEN_PACK_HOURS, multiplier, packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
+import { fmtCompact, fmtDuration, fmtPrice, fmtTokens, type BillingPackage, type PackageKind } from '@/lib/billing-format';
+import { ModelProviderLogo } from '@/components/ProviderLogos';
 import { CheckoutModal } from './checkout-modal';
-import { fetchBackendApi } from '@/lib/api-client';
 
 interface BillingViewProps {
   balance: number;
@@ -22,6 +17,8 @@ interface BillingViewProps {
   entitlements: any[];
   payments: any[];
   ledger: any[];
+  /** Real output multipliers of a few popular models, cheap to expensive. */
+  showcase: { id: string; name: string; out: number }[];
   initialTab?: 'packages' | 'payments' | 'ledger';
 }
 
@@ -43,6 +40,7 @@ export function BillingView({
   entitlements,
   payments,
   ledger,
+  showcase,
   initialTab = 'packages',
 }: BillingViewProps) {
   const { t, locale } = useTranslation();
@@ -124,356 +122,252 @@ export function BillingView({
       <span>{locale === 'en' ? 'Export CSV' : 'Ekspor CSV'}</span>
     </button>
   );
-  const currentCurrency = locale === 'id' ? 'IDR' : 'USD';
+  const en = locale === 'en';
+  const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2';
 
-  const displayedPackages = initialPackages.filter((p) => {
-    const pkgCurr = p.currency === 'USD' ? 'USD' : 'IDR';
-    return pkgCurr === currentCurrency;
-  });
+  // Currency follows the navbar language: Indonesian pays in Rupiah (Duitku), English in USD (PayPal).
+  const usd = en;
+
+  const pkgs = (initialPackages as BillingPackage[]).map((p) => ({ ...p, kind: (p.kind ?? 'balance') as PackageKind }));
+  const tokenPack = pkgs.filter((p) => p.kind === 'tokens').sort((a, b) => (a.priceCents ?? 0) - (b.priceCents ?? 0))[0];
+  /** Price per 1M tokens in the display currency (IDR rupiah or USD cents). PayPal's $1 floor can reorder these. */
+  const unitPrice = (p: BillingPackage) => {
+    const m = p.creditAllowance / 1_000_000;
+    const cents = p.priceCents ?? 0;
+    return m ? (usd ? packagePriceUsdCents(cents, p.currency) : packagePriceIdr(cents, p.currency)) / m : Infinity;
+  };
+  // "Best value" must be true in the currency on screen, so the featured plan is computed, not fixed.
+  const best = pkgs.filter((p) => p.kind !== 'unlimited').sort((a, b) => unitPrice(a) - unitPrice(b))[0];
+  const rest = pkgs
+    .filter((p) => p !== best)
+    .sort((a, b) => (a.kind === 'unlimited' ? 1 : 0) - (b.kind === 'unlimited' ? 1 : 0) || (a.priceCents ?? 0) - (b.priceCents ?? 0));
+  // Featured plan sits second so the eye lands on it.
+  const ordered = best ? [...rest.slice(0, 1), best, ...rest.slice(1)] : rest;
+
+  const kindLabel: Record<PackageKind, string> = {
+    tokens: en ? 'Token pack' : 'Paket token',
+    balance: en ? 'Balance' : 'Saldo',
+    unlimited: en ? 'Unlimited' : 'Unlimited',
+  };
+  // Only time-limited plans carry a term; balance never expires, so its price stands alone.
+  const term = (p: BillingPackage) =>
+    p.kind === 'balance' ? '' : `/ ${fmtDuration(p.durationHours ?? (p.kind === 'tokens' ? TOKEN_PACK_HOURS : 24), en)}`;
+
+  const packLeft = entitlements.filter((e) => !e.unlimited).reduce((a, e) => a + Math.max(0, e.remaining ?? 0), 0);
+  const spendable = packLeft + balance;
+  const fmtWhen = (d: string | Date) =>
+    new Date(d).toLocaleString(en ? 'en-US' : 'id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' });
+  const buy = (p: BillingPackage) => {
+    setSelectedPkg(p);
+    setResumePayment(null);
+  };
 
   const handleSuccess = (creditsAdded: number) => {
     setBalance((prev) => prev + creditsAdded);
   };
 
+  const tabs: ['packages' | 'payments' | 'ledger', string, number?][] = [
+    ['packages', en ? 'Plans' : 'Paket'],
+    ['payments', t.dashboard.qrisHistoryTitle, paymentsList.length],
+    ['ledger', t.dashboard.ledgerHistoryTitle, ledger.length],
+  ];
+  const segment = (active: boolean) =>
+    cn(
+      'min-h-10 px-4 rounded-full text-sm whitespace-nowrap shrink-0 transition-colors cursor-pointer inline-flex items-center gap-2',
+      focusRing,
+      active ? 'bg-neutral-950 text-white font-semibold' : 'text-neutral-600 hover:text-neutral-950',
+    );
+
   return (
-    <div className="w-full space-y-6">
-      {/* Header & Balance Card */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-neutral-200/70">
-        <div>
-          <h1 suppressHydrationWarning className="text-2xl md:text-3xl font-heading font-extrabold text-neutral-950 tracking-tight">
-            {t.dashboard.billingPageTitle}
-          </h1>
-          <p suppressHydrationWarning className="text-xs md:text-sm text-neutral-600 mt-1 max-w-2xl leading-relaxed">
-            {t.dashboard.billingPageSubtitle}
-          </p>
+    <div className="w-full space-y-10">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div role="group" aria-label={en ? 'Billing sections' : 'Bagian billing'} className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full border border-neutral-200 bg-white p-1">
+          {tabs.map(([id, label, count]) => (
+            <button key={id} type="button" aria-pressed={activeTab === id} onClick={() => handleTabChange(id)} className={segment(activeTab === id)}>
+              <span suppressHydrationWarning>{label}</span>
+              {count ? <span className={cn('font-mono text-xs tabular-nums', activeTab === id ? 'text-neutral-300' : 'text-neutral-500')}>{count}</span> : null}
+            </button>
+          ))}
         </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-neutral-200/90 shadow-2xs flex items-center gap-4 shrink-0">
-          <div className="w-10 h-10 rounded-xl bg-neutral-100 border border-neutral-200 flex items-center justify-center text-neutral-900">
-            <Wallet className="h-5 w-5 text-neutral-700" />
-          </div>
-          <div>
-            <div suppressHydrationWarning className="text-[10px] uppercase font-mono text-neutral-500 font-bold">
-              {t.dashboard.activeBalanceLabel}
-            </div>
-            <div className="text-xl font-extrabold text-neutral-950 font-mono">
-              {formatCredits(balance)} <span suppressHydrationWarning className="text-xs text-neutral-500 font-sans font-normal">{locale === 'en' ? 'credits' : 'kredit'}</span>
-            </div>
-          </div>
-        </div>
+        <Link
+          href="/dashboard/redeem"
+          className={cn('inline-flex min-h-10 items-center rounded-full px-4 text-sm font-semibold text-neutral-950 hover:bg-neutral-100', focusRing)}
+        >
+          {en ? 'Redeem a code' : 'Tukar kode'}
+        </Link>
       </div>
 
-      {/* Navigation Tabs (Top-Up vs Riwayat Pembayaran vs Mutasi Saldo) */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200/70 pb-3">
-        <button
-          type="button"
-          onClick={() => handleTabChange('packages')}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer',
-            activeTab === 'packages'
-              ? 'bg-neutral-950 text-white shadow-xs'
-              : 'bg-white border border-neutral-200/80 text-neutral-600 hover:text-neutral-950 hover:bg-neutral-50'
-          )}
-        >
-          <CreditCard className="h-3.5 w-3.5" />
-          <span>{locale === 'en' ? 'Top-Up & Packages' : 'Top-Up & Paket'}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleTabChange('payments')}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer',
-            activeTab === 'payments'
-              ? 'bg-neutral-950 text-white shadow-xs'
-              : 'bg-white border border-neutral-200/80 text-neutral-600 hover:text-neutral-950 hover:bg-neutral-50'
-          )}
-        >
-          <Clock className="h-3.5 w-3.5" />
-          <span suppressHydrationWarning>{t.dashboard.qrisHistoryTitle}</span>
-          {paymentsList.length > 0 && (
-            <span
-              className={cn(
-                'text-[10px] font-mono font-bold px-2 py-0.5 rounded-full',
-                activeTab === 'payments' ? 'bg-neutral-800 text-neutral-100' : 'bg-neutral-100 text-neutral-700'
-              )}
-            >
-              {paymentsList.length}
-            </span>
-          )}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => handleTabChange('ledger')}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer',
-            activeTab === 'ledger'
-              ? 'bg-neutral-950 text-white shadow-xs'
-              : 'bg-white border border-neutral-200/80 text-neutral-600 hover:text-neutral-950 hover:bg-neutral-50'
-          )}
-        >
-          <Coins className="h-3.5 w-3.5" />
-          <span suppressHydrationWarning>{t.dashboard.ledgerHistoryTitle}</span>
-          {ledger.length > 0 && (
-            <span
-              className={cn(
-                'text-[10px] font-mono font-bold px-2 py-0.5 rounded-full',
-                activeTab === 'ledger' ? 'bg-neutral-800 text-neutral-100' : 'bg-neutral-100 text-neutral-700'
-              )}
-            >
-              {ledger.length}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* TAB 1: TOP-UP & PACKAGES */}
       {activeTab === 'packages' && (
-        <div className="space-y-6">
-          {/* Active Passes / Entitlements */}
-          {entitlements.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-neutral-950" />
-                <h2 suppressHydrationWarning className="font-heading font-bold text-base text-neutral-950">
-                  {t.dashboard.activePassesTitle}
-                </h2>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {entitlements.map((e) => {
-                  const allowance = e.allowance || e.remaining || 1;
-                  const remaining = Math.max(0, e.remaining ?? 0);
-                  const percentRemaining = Math.min(100, Math.max(0, Math.round((remaining / allowance) * 100)));
+        <div className="space-y-14">
+          {/* Hero: one headline, the balance, and the currency switch. */}
+          <header className="text-center max-w-2xl mx-auto">
+            <h1 suppressHydrationWarning className="font-heading font-bold tracking-tight text-neutral-950 text-4xl sm:text-5xl leading-[1.05]">
+              {en ? 'Top up tokens. Use every model.' : 'Isi token, pakai semua model.'}
+            </h1>
+            <p suppressHydrationWarning className="mt-4 text-base text-neutral-600">
+              {en ? 'You have ' : 'Kamu punya '}
+              <span className="font-mono font-semibold text-neutral-950">{fmtTokens(spendable, en)}</span>
+              {packLeft > 0
+                ? en
+                  ? ` (${fmtCompact(packLeft, en)} in packs, ${fmtCompact(balance, en)} balance).`
+                  : ` (${fmtCompact(packLeft, en)} di paket, ${fmtCompact(balance, en)} saldo).`
+                : '.'}
+            </p>
+            <p suppressHydrationWarning className="mt-2 text-xs text-neutral-600">
+              {usd
+                ? en
+                  ? `Paid with PayPal or card at Rp${IDR_PER_USD.toLocaleString('id-ID')}/USD, minimum $1.00.`
+                  : `Bayar lewat PayPal atau kartu, kurs Rp${IDR_PER_USD.toLocaleString('id-ID')}/USD, minimal $1.00.`
+                : en
+                  ? 'Paid with QRIS, bank transfer or e-wallet via Duitku.'
+                  : 'Bayar lewat QRIS, transfer bank, atau e-wallet via Duitku.'}
+            </p>
+          </header>
 
-                  return (
-                    <div
-                      key={e.id}
-                      className="p-5 rounded-2xl bg-white border border-neutral-200/90 shadow-2xs space-y-3"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-9 h-9 rounded-xl bg-neutral-100 border border-neutral-200/80 flex items-center justify-center shrink-0">
-                            {e.displayName || e.packageName ? (
-                              <ModelProviderLogo provider={e.displayName || e.packageName} className="w-5 h-5" />
-                            ) : (
-                              <Clock className="w-4 h-4 text-neutral-600" />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-bold text-sm text-neutral-950 truncate">
-                              {e.packageName ?? t.dashboard.billingActivePass}
-                            </div>
-                            {e.displayName && (
-                              <div className="text-[11px] font-medium text-neutral-600 truncate">
-                                Model: <span className="font-bold text-neutral-900">{e.displayName}</span>
-                              </div>
-                            )}
-                            <div suppressHydrationWarning className="text-[11px] text-neutral-500 font-mono mt-0.5">
-                              {t.dashboard.expiresPrefix}{' '}
-                              {e.expiresAt
-                                ? new Date(e.expiresAt).toLocaleString(locale === 'en' ? 'en-US' : 'id-ID', {
-                                    dateStyle: 'medium',
-                                    timeStyle: 'short',
-                                    timeZone: 'Asia/Jakarta',
-                                  })
-                                : t.dashboard.billingToday}
-                            </div>
-                          </div>
-                        </div>
-                        <span suppressHydrationWarning className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs inline-flex items-center gap-1.5 shrink-0 self-start">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          <span>{t.dashboard.activeStatusBadge}</span>
-                        </span>
-                      </div>
-
-                      {/* Remaining Token Progress */}
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between text-[11px] font-mono">
-                          <span className="text-neutral-500">{t.dashboard.activePassRemainingLabel}</span>
-                          <span className="font-bold text-neutral-900 tabular-nums">
-                            {formatCredits(remaining)} / {formatCredits(allowance)} ({percentRemaining}%)
-                          </span>
-                        </div>
-                        <div className="w-full h-2 rounded-full bg-neutral-100 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-neutral-950 transition-all duration-300"
-                            style={{ width: `${percentRemaining}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          {ordered.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-neutral-300 px-6 py-12 text-center text-sm text-neutral-600">
+              {en
+                ? 'Nothing is on sale right now. Plans show up here as soon as one is published.'
+                : 'Belum ada paket yang dijual. Paket akan muncul di sini begitu dirilis.'}
             </div>
-          )}
-
-          {/* Daily Passes & Cheap Packages Section */}
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <CreditCard className="h-4 w-4 text-neutral-950" />
-                <h2 className="font-heading font-bold text-lg text-neutral-950">
-                  {t.dashboard.billingPackagesTitle}
-                </h2>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-2 text-xs font-mono font-bold text-neutral-800 bg-neutral-100/90 px-3.5 py-1.5 rounded-full border border-neutral-200/90 shadow-2xs">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>
-                    {currentCurrency === 'IDR' ? '🇮🇩 IDR · QRIS & Duitku' : '🌐 USD · PayPal & Cards'}
-                  </span>
-                </span>
-              </div>
-            </div>
-
-            {displayedPackages.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-neutral-300 bg-white/60 p-8 text-center">
-                <p className="text-sm font-semibold text-neutral-800">
-                  {locale === 'en'
-                    ? `No ${currentCurrency} packages available right now.`
-                    : `Paket dalam mata uang ${currentCurrency} sedang tidak tersedia.`}
-                </p>
-                <p className="mt-1.5 text-xs text-neutral-500 max-w-sm mx-auto leading-relaxed">
-                  {locale === 'en'
-                    ? 'Check back shortly or change language in the sidebar to view other currency plans.'
-                    : 'Silakan periksa kembali nanti atau ganti bahasa di sidebar untuk melihat paket lainnya.'}
-                </p>
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {displayedPackages.map((p) => {
-                const hasDedicatedModel = Boolean(p.modelId || p.modelDisplayName || p.modelPublicId);
-                const modelKey = p.modelPublicId || p.modelDisplayName || p.name || '';
-                const modelName = p.modelDisplayName || (p.modelPublicId ? p.modelPublicId : (p.name.includes('DeepSeek') ? 'DeepSeek V4' : p.name.includes('Qwen') ? 'Qwen Max' : 'AI Model'));
-
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 items-stretch">
+              {ordered.map((p) => {
+                const featured = p.id === best?.id;
                 return (
-                  <div
+                  <article
                     key={p.id}
-                    className="p-5 rounded-2xl bg-white border border-neutral-200/90 shadow-2xs flex flex-col justify-between hover:border-neutral-300 hover:shadow-xs transition-all group"
+                    className={cn(
+                      'relative flex min-h-80 flex-col rounded-3xl p-6 sm:p-7 transition-colors',
+                      featured
+                        ? // The one dark surface: cheapest per token in this currency. The soft top light gives it depth, nothing else.
+                          'bg-neutral-950 text-white bg-[radial-gradient(120%_60%_at_50%_0%,#3f3f46_0%,#09090b_60%)] xl:-my-3 xl:py-10'
+                        : 'bg-white border border-neutral-200 hover:border-neutral-300',
+                    )}
                   >
-                    <div>
-                      {/* Top Badges */}
-                      <div className="flex items-center justify-between gap-2 mb-3">
-                        {hasDedicatedModel ? (
-                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-blue-700 bg-blue-50/80 px-2.5 py-0.5 rounded-full border border-blue-200/80 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                            <span>{locale === 'en' ? 'Model Pass' : 'Pass Model'}</span>
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50/80 px-2.5 py-0.5 rounded-full border border-emerald-200/80 flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            <span>{locale === 'en' ? 'Universal Credits' : 'Kredit Universal'}</span>
-                          </span>
-                        )}
-
-                        <span className="text-xs text-neutral-500 font-mono">
-                          {p.durationHours ? `${p.durationHours}h` : 'Flex'}
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 suppressHydrationWarning className={cn('text-sm font-semibold', featured ? 'text-white' : 'text-neutral-950')}>
+                        {kindLabel[p.kind]}
+                      </h2>
+                      {featured && (
+                        <span suppressHydrationWarning className="whitespace-nowrap rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-neutral-950">
+                          {en ? 'Best value' : 'Paling hemat'}
                         </span>
-                      </div>
-
-                      {/* Visual Header: Model Logo + Name OR Universal Token + Multi-Logos */}
-                      {hasDedicatedModel ? (
-                        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-neutral-50/70 border border-neutral-200/70 mb-3">
-                          <div className="w-10 h-10 rounded-lg bg-white border border-neutral-200/90 flex items-center justify-center shrink-0 shadow-2xs">
-                            <ModelProviderLogo provider={modelKey} className="w-6 h-6" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider font-semibold">
-                              {locale === 'en' ? 'Target AI Model' : 'Model AI'}
-                            </div>
-                            <div className="font-heading font-extrabold text-sm text-neutral-950 truncate" title={modelName}>
-                              {modelName}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-3 p-2.5 rounded-xl bg-neutral-50/70 border border-neutral-200/70 mb-3">
-                          <div className="w-10 h-10 rounded-lg bg-white border border-neutral-200/90 flex items-center justify-center shrink-0 shadow-2xs text-emerald-600">
-                            <Coins className="w-5 h-5" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider font-semibold">
-                              {locale === 'en' ? 'All Models Supported' : 'Semua Model AI'}
-                            </div>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              <ClaudeLogo className="w-3.5 h-3.5" />
-                              <OpenAILogo className="w-3.5 h-3.5" />
-                              <DeepSeekLogo className="w-3.5 h-3.5" />
-                              <QwenLogo className="w-3.5 h-3.5" />
-                              <KimiLogo className="w-3.5 h-3.5" />
-                              <span className="text-[9px] font-mono font-bold text-neutral-400">+more</span>
-                            </div>
-                          </div>
-                        </div>
                       )}
-
-                      <h3 className="font-heading font-bold text-base text-neutral-950 mb-1">
-                        {locale === 'en' && p.nameEn ? p.nameEn : p.name}
-                      </h3>
-                      <div className="text-xl font-extrabold text-neutral-950 mb-1 font-mono">
-                        {p.currency === 'USD'
-                          ? `$ ${(p.priceCents / 100).toFixed(2)} USD`
-                          : `Rp ${(p.priceCents ?? 0).toLocaleString('id-ID')}`}
-                      </div>
-                      <div className="text-xs text-neutral-500 font-mono mb-2">
-                        +{formatCredits(p.creditAllowance)} credits
-                        {p.durationHours ? ` · ${p.durationHours === 24 ? t.dashboard.duration24h : `${p.durationHours}h`}` : ' · Flexible'}
-                      </div>
-
-                      <div className="pt-2.5 border-t border-neutral-100 mt-2.5">
-                        <button
-                          id={`buy-pkg-${p.id}`}
-                          onClick={() => {
-                            setSelectedPkg(p);
-                            setResumePayment(null);
-                          }}
-                          className="w-full py-2.5 rounded-full bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
-                        >
-                          <CreditCard className="h-3.5 w-3.5" />
-                          <span suppressHydrationWarning>{t.dashboard.buyPackageBtn}</span>
-                        </button>
-                      </div>
                     </div>
-                  </div>
+
+                    <div suppressHydrationWarning className={cn('mt-6 font-mono text-5xl font-bold tracking-tight tabular-nums leading-none', featured ? 'text-white' : 'text-neutral-950')}>
+                      {fmtCompact(p.creditAllowance, en)}
+                    </div>
+                    <div suppressHydrationWarning className={cn('mt-2 text-sm', featured ? 'text-neutral-300' : 'text-neutral-600')}>
+                      {p.kind === 'unlimited'
+                        ? `${en ? 'tokens a day' : 'token per hari'} · ${p.modelDisplayName ?? (en ? 'one model' : 'satu model')}`
+                        : en
+                          ? 'tokens'
+                          : 'token'}
+                    </div>
+
+                    <div className="mt-auto pt-10 flex items-baseline gap-2">
+                      <span suppressHydrationWarning className={cn('font-heading text-3xl font-bold tracking-tight tabular-nums', featured ? 'text-white' : 'text-neutral-950')}>
+                        {fmtPrice(p, usd)}
+                      </span>
+                      {term(p) && <span suppressHydrationWarning className={cn('whitespace-nowrap text-sm', featured ? 'text-neutral-300' : 'text-neutral-600')}>{term(p)}</span>}
+                    </div>
+
+                    <button
+                      id={`buy-pkg-${p.id}`}
+                      type="button"
+                      aria-label={en ? `Buy ${p.name}` : `Beli ${p.name}`}
+                      onClick={() => buy(p)}
+                      className={cn(
+                        'mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-full text-sm font-semibold transition-colors cursor-pointer',
+                        featured
+                          ? 'bg-white text-neutral-950 hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950'
+                          : cn('border border-neutral-300 text-neutral-950 hover:border-neutral-950 hover:bg-neutral-50', focusRing),
+                      )}
+                    >
+                      <span suppressHydrationWarning>{en ? 'Buy' : 'Beli'}</span>
+                    </button>
+                  </article>
                 );
               })}
             </div>
+          )}
 
-            {/* Contextual Nav Helper */}
-            <div className="p-4 rounded-2xl bg-neutral-50/80 border border-neutral-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-neutral-600">
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-neutral-400 shrink-0" />
-                <span>
-                  {locale === 'en'
-                    ? 'Looking for invoices, transaction receipts, or credit mutations?'
-                    : 'Mencari bukti pembayaran kuitansi atau mutasi kredit?'}
-                </span>
+          {entitlements.length > 0 && (
+            <section aria-labelledby="active-title" className="space-y-4">
+              <h2 id="active-title" suppressHydrationWarning className="text-lg font-semibold text-neutral-950">
+                {t.dashboard.activePassesTitle}
+              </h2>
+              <ul className="grid gap-3 sm:grid-cols-2">
+                {entitlements.map((e) => {
+                  const allowance = Math.max(1, e.allowance ?? 1);
+                  const remaining = Math.max(0, e.remaining ?? 0);
+                  const pct = Math.min(100, Math.round((remaining / allowance) * 100));
+                  const label = e.unlimited
+                    ? en
+                      ? `${fmtCompact(remaining, en)} of ${fmtCompact(allowance, en)} left today`
+                      : `Sisa hari ini ${fmtCompact(remaining, en)} dari ${fmtCompact(allowance, en)}`
+                    : en
+                      ? `${fmtCompact(remaining, en)} of ${fmtCompact(allowance, en)} left`
+                      : `Sisa ${fmtCompact(remaining, en)} dari ${fmtCompact(allowance, en)}`;
+                  return (
+                    <li key={e.id} className="rounded-2xl border border-neutral-200 bg-white p-5 space-y-3">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="font-semibold text-neutral-950 truncate">{e.packageName ?? t.dashboard.billingActivePass}</span>
+                        <span suppressHydrationWarning className="font-mono text-xs text-neutral-800 tabular-nums shrink-0">{pct}%</span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-neutral-100 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+                        <div className="h-full rounded-full bg-neutral-950" style={{ width: `${pct}%` }} />
+                      </div>
+                      <div suppressHydrationWarning className="text-xs text-neutral-600">
+                        {label}
+                        {e.unlimited && e.displayName ? ` · ${e.displayName}` : ''}
+                        {e.unlimited && e.resetsAt ? ` · ${en ? 'refills' : 'terisi ulang'} ${fmtWhen(e.resetsAt)}` : ''}
+                        {` · ${en ? 'ends' : 'berakhir'} ${fmtWhen(e.expiresAt)}`}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+
+          {tokenPack && showcase.length > 0 && (
+            <section aria-labelledby="reach-title" className="rounded-3xl border border-neutral-200 bg-white p-6 sm:p-8">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 id="reach-title" suppressHydrationWarning className="text-lg font-semibold text-neutral-950">
+                  {en ? `How far ${fmtTokens(tokenPack.creditAllowance, en)} go` : `Seberapa jauh ${fmtTokens(tokenPack.creditAllowance, en)}`}
+                </h2>
+                <Link href="/dashboard/models" className={cn('inline-flex min-h-11 items-center text-sm font-semibold text-neutral-950 underline underline-offset-4 decoration-neutral-300 hover:decoration-neutral-950 rounded', focusRing)}>
+                  {en ? 'All multipliers' : 'Semua multiplier'}
+                </Link>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('payments')}
-                  className="font-bold text-neutral-950 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <span>{locale === 'en' ? 'Payment History' : 'Riwayat Pembayaran'}</span>
-                  <ArrowRight className="h-3 w-3" />
-                </button>
-                <span className="text-neutral-300">·</span>
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('ledger')}
-                  className="font-bold text-neutral-950 hover:underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <span>{locale === 'en' ? 'Credit Ledger' : 'Mutasi Saldo'}</span>
-                  <ArrowRight className="h-3 w-3" />
-                </button>
-              </div>
-            </div>
-          </div>
+              <p suppressHydrationWarning className="mt-1 text-sm text-neutral-600">
+                {en
+                  ? 'Output tokens you could generate if the whole pack went to one model, at today’s multipliers.'
+                  : 'Token output yang bisa dihasilkan kalau seluruh paket dipakai di satu model, dengan multiplier saat ini.'}
+              </p>
+              <dl className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-px overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-200">
+                {showcase.map((m) => (
+                  <div key={m.id} className="bg-white p-4 sm:p-5 min-w-0">
+                    <dt className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-2.5 text-sm font-medium text-neutral-800 min-w-0" title={m.name}>
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50">
+                        <ModelProviderLogo provider={m.id} className="h-6 w-6" />
+                      </span>
+                      <span className="line-clamp-2 sm:line-clamp-1">{m.name}</span>
+                    </dt>
+                    <dd suppressHydrationWarning className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-neutral-950 tabular-nums">
+                      {fmtCompact(Math.floor(tokenPack.creditAllowance / multiplier(m.out)), en)}
+                    </dd>
+                    <dd suppressHydrationWarning className="text-xs text-neutral-600 font-mono">
+                      output · {multiplier(m.out).toLocaleString(en ? 'en-US' : 'id-ID', { maximumFractionDigits: 1 })}x
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
         </div>
       )}
 
@@ -482,12 +376,9 @@ export function BillingView({
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-neutral-950" />
-                <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
-                  {t.dashboard.qrisHistoryTitle}
-                </h2>
-              </div>
+              <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
+                {t.dashboard.qrisHistoryTitle}
+              </h2>
               <p className="text-xs text-neutral-500 mt-0.5">
                 {locale === 'en'
                   ? 'Track invoice payments, QRIS settlements, and download official receipts.'
@@ -545,7 +436,7 @@ export function BillingView({
                         }
                         if (st === 'refunded') {
                           return {
-                            className: 'bg-purple-100 text-purple-800 border border-purple-200',
+                            className: 'bg-neutral-100 text-neutral-800 border border-neutral-200',
                             label: t.dashboard.billingStatusRefunded ?? (locale === 'en' ? 'Refunded' : 'Dikembalikan'),
                           };
                         }
@@ -636,7 +527,6 @@ export function BillingView({
                                   }}
                                   className="px-3 py-1 rounded-full bg-neutral-950 hover:bg-neutral-800 text-white text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95"
                                 >
-                                  <CreditCard className="h-3 w-3" />
                                   <span suppressHydrationWarning>{locale === 'en' ? 'Pay Now' : 'Lanjutkan Bayar'}</span>
                                 </button>
                               )}
@@ -658,12 +548,9 @@ export function BillingView({
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
-                <Coins className="h-4 w-4 text-neutral-950" />
-                <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
-                  {t.dashboard.ledgerHistoryTitle}
-                </h2>
-              </div>
+              <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
+                {t.dashboard.ledgerHistoryTitle}
+              </h2>
               <p className="text-xs text-neutral-500 mt-0.5">
                 {locale === 'en'
                   ? 'Audit log of all token usages, top-ups, voucher redeems, and credit balances.'
@@ -710,7 +597,7 @@ export function BillingView({
                                   ? (locale === 'en' ? 'Adjusted by admin' : 'Disesuaikan admin')
                                   : entry.reference
                                     ? `${locale === 'en' ? 'Request' : 'Request'} ${entry.reference.slice(0, 12)}`
-                                    : '—'}
+                                    : '-'}
                         </td>
                         <td className="px-5 py-3 text-neutral-500 font-mono whitespace-nowrap">
                           {new Date(entry.createdAt).toLocaleString(
@@ -733,6 +620,7 @@ export function BillingView({
         <CheckoutModal
           pkg={selectedPkg}
           existingPayment={resumePayment}
+          provider={usd ? 'paypal' : 'duitku'}
           onClose={() => {
             setSelectedPkg(null);
             setResumePayment(null);

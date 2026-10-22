@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits, formatTokenEstimate, timeAgo, API_BASE_URL } from '@/lib/utils';
+import { fmtMultiplier, fmtTokens } from '@/lib/billing-format';
 import GatewayStatusPopover from '@/components/GatewayStatusPopover';
 import QuickstartHub from '@/components/QuickstartHub';
 import { ModelItem } from '@/lib/models-data';
@@ -201,7 +202,7 @@ export default function DeveloperGateway({
             </div>
             <div className="mt-auto pt-6">
               <div suppressHydrationWarning className="text-3xl font-mono font-bold text-neutral-950 tabular-nums">
-                Rp {balance.toLocaleString(locale === 'id' ? 'id-ID' : 'en-US')}
+                {fmtTokens(balance, !isId)}
               </div>
               {balance > 0 && avgCreditsPer1m > 0 ? (
                 <div className="mt-1 font-mono text-sm font-semibold text-emerald-700">
@@ -229,7 +230,7 @@ export default function DeveloperGateway({
               <span suppressHydrationWarning className="text-sm text-neutral-600">
                 {t.dashboard.activeKeys}
               </span>
-              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums">
                 {activeKeys} <span className="text-base font-sans font-medium text-neutral-500">{t.dashboard.keysActiveCount}</span>
               </div>
               <span suppressHydrationWarning className="mt-1 block text-xs text-neutral-500">{t.dashboard.manageKeys}</span>
@@ -243,7 +244,7 @@ export default function DeveloperGateway({
               <span suppressHydrationWarning className="text-sm text-neutral-600">
                 {usage.totalTokens > 0 ? t.dashboard.tokensUsedUnit : t.dashboard.noUsageYet}
               </span>
-              <div className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+              <div className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums">
                 {formatTokenEstimate(usage.totalTokens)} <span className="text-base font-sans font-medium text-neutral-500">Token</span>
               </div>
               {usage.totalTokens > 0 ? (
@@ -269,12 +270,12 @@ export default function DeveloperGateway({
               <span suppressHydrationWarning className="text-sm text-neutral-600">
                 {t.dashboard.exploreCatalog}
               </span>
-              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums truncate">
+              <div suppressHydrationWarning className="mt-3 text-2xl font-mono font-bold text-neutral-950 tabular-nums">
                 {modelCount} <span className="text-base font-sans font-medium text-neutral-500">{t.dashboard.modelsReadyCount}</span>
               </div>
               <span suppressHydrationWarning className="mt-1 block text-xs font-mono text-neutral-500">
                 {minInputRate > 0
-                  ? `${t.dashboard.ratesFrom} Rp ${minInputRate.toLocaleString(locale === 'id' ? 'id-ID' : 'en-US')} / 1M`
+                  ? `${t.dashboard.ratesFrom} ${fmtMultiplier(minInputRate, !isId)}`
                   : t.dashboard.modelsDesc}
               </span>
             </div>
