@@ -178,8 +178,14 @@ export const models = pgTable(
  * Provider pool (Pooling Phase 1B): ordered upstream candidates for one public model.
  *
  * D9 parity invariant: every ENABLED row must serve its model at a context window of at
- * least `models.context_length` and support ALL of `models.capabilities`. This is enforced
- * when seeding/administering the pool, never per request.
+ * least `models.context_length` and support ALL of `models.capabilities`. This is checked
+ * when seeding/administering the pool (the seed has a D9 preview).
+ *
+ * Protocol Phase 4 stores the capability matrix per entry (not per provider): the same
+ * provider can need different flags per model. At request time the route plan also skips
+ * entries whose declared context is below the model's and entries that cannot serve the
+ * tools/vision the request actually uses, so a pool that mixes incompatible entries can
+ * never serve a tool or vision request from the wrong one.
  *
  * D10: UNIQUE(model_id, provider_id) means a provider can appear at most once per model
  * (no two keys/accounts of the same provider for one model).
@@ -209,12 +215,29 @@ export const modelProviderPool = pgTable(
     ttfbTimeoutMs: integer('ttfb_timeout_ms'),
     // Informational tag only; no automatic enforcement in this phase.
     dataPolicy: text('data_policy'),
+    // Protocol Phase 4 capability matrix. Defaults are backward compatible: an existing
+    // row keeps accepting tools, keeps rejecting vision requests (nothing claimed it
+    // before), and keeps using OpenAI translation.
+    supportsTools: boolean('supports_tools').notNull().default(true),
+    supportsParallelTools: boolean('supports_parallel_tools').notNull().default(true),
+    supportsReasoning: boolean('supports_reasoning').notNull().default(false),
+    // True when this reasoning model rejects an assistant tool-call turn that omits
+    // `reasoning_content`. The Anthropic edge re-injects it from a bounded TTL cache.
+    reasoningEchoRequired: boolean('reasoning_echo_required').notNull().default(false),
+    supportsVision: boolean('supports_vision').notNull().default(false),
+    usageInStream: boolean('usage_in_stream').notNull().default(true),
+    // Entry-level limits. NULL means "not declared / inherit the model-level value".
+    contextLength: integer('context_length'),
+    maxOutputTokens: integer('max_output_tokens'),
+    // Reserved for Protocol Phase 5 (native Anthropic). Phase 4 only routes `openai`.
+    apiFormat: text('api_format', { enum: ['openai', 'anthropic'] }).notNull().default('openai'),
     createdAt: now(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('model_provider_pool_model_provider_unique').on(t.modelId, t.providerId),
     index('model_provider_pool_model_priority_idx').on(t.modelId, t.priority),
+    check('model_provider_pool_api_format_check', sql`${t.apiFormat} IN ('openai','anthropic')`),
   ],
 );
 

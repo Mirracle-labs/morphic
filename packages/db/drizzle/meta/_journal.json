@@ -134,6 +134,13 @@
       "when": 1792578382376,
       "tag": "0018_request_logs_pool_observability",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792684481302,
+      "tag": "0019_pool_capability_matrix",
+      "breakpoints": true
     }
   ]
 }
