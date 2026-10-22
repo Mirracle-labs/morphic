@@ -1,6 +1,6 @@
 # Compatibility Notes — Protocol Track
 
-Implementation record for Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F. Owner-run where noted.
+Implementation record for Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F. Owner-run where noted.
 Last updated: 2026-10-22.
 
 Scope: inbound OpenAI/Anthropic compatibility for the Hono gateway (`apps/api`).
@@ -93,8 +93,9 @@ Upstream error shapes observed (ZenMux):
 
 Implications for translation:
 
-- `tool_choice: any → required` will break on this reasoning model. Phase 4 capability matrix needs a per-provider downgrade (e.g. `required → auto`), or the translator must fall back to `auto`.
-- Reasoning echo is **conditional**. Echoing a real tool-loop history (assistant message produced by the model) works with or without `reasoning`. A synthetic/fabricated tool-call message without reasoning is rejected with `reasoning_content must be passed back`. Clients that drop reasoning fields may hit this on the second tool turn; Phase 4 owns re-injection (`reasoning_echo_required`).
+- `tool_choice: any → required` breaks on this reasoning model. Phase 4 implements the per-entry downgrade: `reasoning_echo_required=true` ⇒ `auto`, otherwise `required` (see §7.4).
+- Reasoning echo is **conditional**. Echoing a real tool-loop history (assistant message produced by the model) works with or without `reasoning`. A synthetic/fabricated tool-call message without reasoning is rejected with `reasoning_content must be passed back`. Clients that drop reasoning fields may hit this on the second tool turn; Phase 4 re-injects from a bounded cache when `reasoning_echo_required=true` (see §7.4).
+- The ZenMux DeepSeek V4.1 Flash entry must be flagged manually: `model_provider_pool.reasoning_echo_required = true` and `supports_reasoning = true`. The seed cannot discover this.
 - `count_tokens` must stay local (`ceil(chars/4)`); never proxy it.
 - 422 is not in Appendix B explicitly; map like 400/422 → `provider_error`, no failover (matches plan).
 - 402 already maps to `provider_auth_failed` (failover + alert) in Appendix B.
@@ -121,9 +122,9 @@ This is DB data for the dev branch only; no schema/seed change.
 
 | Item | Status |
 |---|---|
-| Official DeepSeek/Qwen/Kimi tool/parallel/usage/reasoning/vision behavior | PENDING — no `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `MOONSHOT_API_KEY` |
-| Reasoning echo requirement per official provider | PENDING (ZenMux is conditional — see §4) |
-| `tool_choice: required` support per official provider | PENDING |
+| Official DeepSeek/Qwen/Kimi tool/parallel/usage/reasoning/vision behavior | PENDING — no `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `MOONSHOT_API_KEY`. The per-entry columns now exist; only ZenMux/DeepSeek is populated from evidence. |
+| Reasoning echo requirement per official provider | PENDING for GLM/Kimi/MiniMax. Implemented for ZenMux/DeepSeek behavior and covered by tests; set `reasoning_echo_required=true` manually. |
+| `tool_choice: required` support per official provider | PENDING. The downgrade is implemented for `reasoning_echo_required` entries (§7.4). |
 | p95 turn duration to tune `ANTHROPIC_TOTAL_TIMEOUT_MS` | PENDING (needs real Claude Code run) |
 | Memory impact of 32 MB body × concurrency | PENDING |
 | DeepSeek `/anthropic` field compatibility | NOT NEEDED until Phase 5 |
@@ -305,6 +306,94 @@ Deviations / observed:
 
 Rollback: set `ANTHROPIC_ENABLED=false` to unmount the route, or revert `routes/anthropic.ts` and the new test.
 
+## 7.4 Phase 4 implementation notes
+
+**State:** complete and committed on `feature/api-implementation` (2026-10-22). Phase 5 (native Anthropic) was not started.
+
+### Schema and defaults
+
+Migration `0019_pool_capability_matrix` adds nine additive columns to `model_provider_pool` (no `providers` change, no drops, existing rows keep working):
+
+| Column | Default |
+|---|---|
+| `supports_tools` | `true` |
+| `supports_parallel_tools` | `true` |
+| `supports_reasoning` | `false` |
+| `reasoning_echo_required` | `false` |
+| `supports_vision` | `false` |
+| `usage_in_stream` | `true` |
+| `context_length` | `NULL` |
+| `max_output_tokens` | `NULL` |
+| `api_format` | `'openai'` (check: `openai|anthropic`) |
+
+The seed (`seed-model-provider-pool.sql`) populates them explicitly and remains idempotent (`ON CONFLICT DO NOTHING`):
+
+- `supports_tools` = `NOT (models.capabilities ? 'no-tools')` (true for every normal model), `supports_parallel_tools`/`usage_in_stream` = `true`;
+- `supports_reasoning`/`supports_vision` derived from `models.capabilities` containing `reasoning` / `vision`;
+- `reasoning_echo_required` = `false` (no database evidence; set manually);
+- `context_length` = `models.context_length` (D9 by construction);
+- `max_output_tokens` = `NULL`, `api_format` = `'openai'`.
+
+The seed also has a **D9 preview** (`section 4b`) that lists enabled rows with a too-small context, tools denied without a `no-tools` claim, or vision denied while the model claims `vision`.
+
+### Capability detection
+
+- OpenAI: non-empty `tools` ⇒ `tools`; any `image_url` content part ⇒ `vision`.
+- Anthropic: non-empty `tools` ⇒ `tools`; any `image` block in a user message ⇒ `vision`. Images inside `tool_result` are translated to text and do not require vision.
+- Legacy candidates (`models.capabilities`) are permissive: `no-tools` / `no-vision` tokens deny; everything else defaults to tools/vision allowed, preserving pre-Phase-4 behaviour.
+- Pool entries are filtered by capability, `api_format != 'openai'`, and D9 context before ordering. Pool and legacy sources stay mutually exclusive (D2).
+
+Refusals:
+
+| Situation | Result |
+|---|---|
+| Model exists, eligible candidates exist, none supports the required capability | `400 unsupported_capability` before reserve (OpenAI `invalid_request_error`; Anthropic `invalid_request_error`) |
+| No eligible candidate at all (no provider/credential/enabled entry) | `503 provider_not_configured` |
+| Eligible candidates exist but all circuits are open | `503 provider_unavailable` + `Retry-After` |
+| Only entries violate D9 context | `503 provider_not_configured` (configuration problem, not a client capability problem) |
+
+### Reasoning echo
+
+- `domain/anthropic/reasoning-cache.ts` — per-process `Map`, default TTL 15 min (`REASONING_ECHO_TTL_MS`), max 512 ids (`REASONING_ECHO_MAX_ENTRIES`). Entry longer than 32 KiB is not cached. Reasoning text is never logged or returned.
+- Populated by `reasoning-echo.ts` from non-stream `message.reasoning_content`/`message.reasoning` and from stream deltas. Key = sanitized tool-call id (the same transformation applied to the next Anthropic request).
+- Injected by `translateAnthropicRequest` only when `route.reasoningEchoRequired=true`. The client never supplies the reasoning.
+- `tool_choice: any` maps to `required` as before, then downgrades to `auto` only when `supportsRequiredToolChoice` is false (derived from `reasoning_echo_required`). This keeps the mapping unchanged for every other entry and for the OpenAI edge.
+- `max_tokens` clamps to `min(route.contextLength, route.maxOutputTokens)` when an output cap is declared.
+
+Single-node limitation: a restart or a different node loses the cache. Pooling Phase 2 must revisit this (shared Redis was explicitly out of scope for Phase 4).
+
+Scope limits: the cache is consulted only by the Anthropic request translator. An OpenAI client that drops `reasoning_content` on a tool loop can still hit the upstream 400; wiring the same cache into the OpenAI edge is a separate decision. `supports_parallel_tools` and `usage_in_stream` are stored/returned but not enforced per request.
+
+### Files
+
+- `packages/db/src/schema.ts`, `packages/db/drizzle/0019_pool_capability_matrix.sql`, `packages/db/scripts/seed-model-provider-pool.sql`
+- `apps/api/src/domain/provider-capabilities.ts` (new)
+- `apps/api/src/domain/router.ts` (capability-aware candidates/route plan)
+- `apps/api/src/domain/completion.ts` (`requiredCapabilities`, `unsupported_capability` refusal)
+- `apps/api/src/routes/v1.ts`, `apps/api/src/routes/anthropic.ts`
+- `apps/api/src/domain/anthropic/{request,stream}.ts`, `reasoning-cache.ts` (new), `reasoning-echo.ts` (new)
+- Tests: `routes/capability-matrix.test.ts` (new, 19), `domain/provider-capabilities.test.ts` (new, 8), `domain/anthropic/reasoning-cache.test.ts` (new, 5), plus additions to `domain/anthropic/request.test.ts` and `domain/model-provider-pool.test.ts`.
+
+### Verification (2026-10-22)
+
+| Command | Result |
+|---|---|
+| `pnpm --filter @morphic/db typecheck` | ✅ exit 0 |
+| `pnpm --filter @morphic/api typecheck` | ✅ exit 0 |
+| `pnpm --filter @morphic/api lint` | ✅ 0 errors, 68 pre-existing warnings |
+| `pnpm --filter @morphic/api test` | **372 tests, 370 pass, 2 fail** — only `P1-04` (Neon latency vs the 60 s window) and Duitku `/create` (placeholder sandbox credentials) |
+| `pnpm -w typecheck` | ✅ 4/4 packages |
+| `pnpm --filter @morphic/shared test` | ✅ 10/10 |
+| `pnpm test:web` | ✅ 25/25 |
+| Migration `0019` on `.env.test` | ✅ applied; columns + check constraint verified by `model-provider-pool.test.ts` |
+| Seed syntax + idempotency | ✅ executed inside a transaction and rolled back; `ON CONFLICT DO NOTHING` retained |
+
+Phase 4 adds **37 tests**: 19 in `capability-matrix.test.ts`, 8 capability unit tests, 5 reasoning-cache tests, 2 migration/default tests, and 3 new translator tests.
+
+**Test-discovery fix:** the package script previously used an unquoted `src/**/*.test.ts`, which `sh` expands to one directory level only, silently excluding `src/domain/anthropic/*.test.ts`. The glob is now quoted so Node expands it. That exposes 26 pre-existing translator tests (13 request, 6 response, 7 stream) in addition to the 37 new ones, which is why the suite count rises from 309 to **372**. All previously hidden tests pass.
+
+Rollback: set `POOL_ENABLED=false` to return to legacy routing; revert the Phase 4 commits for the code. Migration `0019` is additive and safe to leave in place (all defaults preserve old behaviour).
+
 ## 8. Test data hygiene
 
 The API suite writes to the configured test DB and leaves rows behind (users, providers/models, packages, payments, ledger). After each baseline run, test rows are removed and the DB is restored to seed state (1 user, 3 providers, 3 models, seed packages).
@@ -313,7 +402,7 @@ Do not point `DATABASE_URL` in `.env.test` at production; `test-guard` will reje
 
 ## 9. Handoff — start here for Phase 4
 
-**State:** Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22) on `feature/api-implementation`. `main` remains `origin/main`. Phase 4 is next. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
+**State:** Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22) on `feature/api-implementation`. `main` remains `origin/main`. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
 
 Phase 2 modified files (already merged):
 
@@ -353,7 +442,16 @@ Phase 3 delivered (AGENTS.md §7):
 - Tests: primary fail → fallback; all candidates fail; all circuits open → 503 + `Retry-After`; client abort → no provider failure; partial stream → partial billing.
 - Full notes and the 7 new tests: §7.3.
 
-Phase 4 is **next**: provider capability matrix, reasoning echo/re-injection, and the `tool_choice: required` downgrade for reasoning models. Pooling 1G remains gated on production observation.
+Phase 4 delivered (full notes: §7.4):
+
+- Per-entry capability matrix (migration `0019`), capability-aware route plan, `400 unsupported_capability` before reserve.
+- D9 filtering in the route plan + seed preview; `api_format` stored/reserved, only `openai` routable.
+- Reasoning echo cache (bounded, TTL, single-node) and the `tool_choice: any → auto` downgrade for `reasoning_echo_required` entries.
+- Qwen tool/stream coverage and 11-turn tool loops with reasoning on/off.
+
+**Phase 5 (native Anthropic) is next but explicitly NOT started.** It remains gated on the conditions in `AGENTS.md` §7 and owner approval. Pooling 1G remains gated on production observation.
+
+Phase 4 cross-track note: the protocol track was explicitly authorized to make minimal additive changes to `packages/db/src/schema.ts` (pool table only), one new migration, the pool seed, `domain/router.ts`, `domain/completion.ts`, and the two inference routes. `billing.ts`, `circuit-breaker.ts`, circuit/billing semantics, and the pooling Redis client were not changed.
 
 Before live E2E / Phase 4:
 
