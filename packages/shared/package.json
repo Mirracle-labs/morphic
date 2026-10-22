@@ -9,6 +9,7 @@
     "./credits": "./src/credits.ts",
     "./types": "./src/types.ts",
     "./models": "./src/models.ts",
+    "./anthropic": "./src/anthropic.ts",
     "./provider-crypto": "./src/provider-crypto.ts",
     "./email": "./src/email.ts"
   },

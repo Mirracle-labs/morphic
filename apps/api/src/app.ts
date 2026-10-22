@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import { v1 } from './routes/v1';
+import { anthropic } from './routes/anthropic';
 import { webhooks } from './routes/webhooks';
 import { keys } from './routes/keys';
 import { account } from './routes/account';
@@ -52,7 +53,7 @@ app.use(
     // Allowed request origin
     origin: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
     // Allowed headers from FE to BE
-    allowHeaders: ['Content-Type', 'Authorization', 'x-internal-secret'],
+    allowHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta', 'x-goog-api-key', 'x-internal-secret'],
     // Allowed HTTP methods
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     // Expose headers to FE
@@ -102,6 +103,7 @@ app.route('/v1/account', account);
 app.route('/v1/payments', payments);
 app.route('/v1/redeem', redeem);
 app.route('/v1/catalog', catalog);
+if (process.env.ANTHROPIC_ENABLED === 'true') app.route('/v1', anthropic);
 app.route('/v1', v1);
 
 export { app };
