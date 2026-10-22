@@ -1,7 +1,7 @@
 # Compatibility Notes — Protocol Track
 
-Phase 0 record (baseline + `[VERIFY]` findings). Owner-run where noted.
-Last updated: 2026-10-21.
+Implementation record for Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F. Owner-run where noted.
+Last updated: 2026-10-22.
 
 Scope: inbound OpenAI/Anthropic compatibility for the Hono gateway (`apps/api`).
 Authoritative plans: `apps/api/plan-pooling-providers.md` (pooling), `apps/api/AGENTS.md` (protocol).
@@ -178,7 +178,7 @@ Live E2E through the local gateway + ZenMux (temporary DB rows, removed after; o
 
 ## 7.1 Phase 2 implementation notes
 
-**State:** complete and green in the working tree (2026-10-21). Merge-order deviation from AGENTS.md §5 remains: Phase 1 and Phase 2 landed before Pooling Phase 0/0.5.
+**State:** complete and merged to `main` (2026-10-21). The original merge-order deviation from AGENTS.md §5 (Phase 1/2 before Pooling 0/0.5) is resolved; the pooled route plan and shared failover loop are now in `main`.
 
 Shipped files:
 
@@ -254,17 +254,68 @@ Verification: **300 API tests, 298 pass, 2 fail** — only the known `P1-04` and
 
 Rollback: `POOL_ENABLED=false` returns to legacy candidates immediately. Revert commits for a full rollback; migrations `0014`/`0015` are additive and safe to leave in place.
 
+## 7.3 Phase 3 implementation notes
+
+**State:** complete in the working tree (2026-10-22); commit/merge pending.
+
+Phase 3 was largely delivered by Pooling 1E: `routes/anthropic.ts` already called the shared `startCompletion` loop, which builds `createRoutePlan` and iterates `plan.next()`. This phase audited that path and closed the remaining gaps.
+
+Shipped:
+
+- `apps/api/src/routes/anthropic.ts` — streaming finalize now mirrors Phase 0.5:
+  - `clientGone` detection via `stream.onAbort`, `stream.aborted`, `c.req.raw.signal.aborted`, and write failures.
+  - Client abort after headers settles `partial` with `client_disconnected`.
+  - Upstream break settles `partial` by default, or `error` when `PARTIAL_BILLING_UPSTREAM_BREAK=refund`; zero delivered tokens is `error`.
+  - Explicit upstream error payload settles `error` with `invalid_upstream_response`.
+  - A mid-stream break emits the sanitized `event: error` instead of a fabricated `message_stop`.
+  - Idle heartbeat and normal `message_stop` behavior are unchanged.
+- `apps/api/src/routes/anthropic.ts` — `provider_unavailable` now returns `503 api_error` with `Retry-After` clamped to 1–120 seconds and message `provider unavailable`. `routing_unavailable` / `provider_not_configured` remain `503 provider not configured`.
+- `apps/api/src/routes/anthropic-failover.test.ts` (new) — 7 tests.
+
+Audit:
+
+- Anthropic completion uses the route plan and provider candidates: **yes**.
+- All candidates use OpenAI translation: **yes** (`prepareBody` always translates; no `api_format`).
+- Failover only before headers/first byte: **yes**; once a 2xx stream is returned, the route is fixed.
+- Settle uses the served route's pricing/upstream pricing: **yes**; a fallback pool cost override was proven to affect `upstreamCostCredits` while the user charge stayed model-level.
+
+Tests:
+
+1. Primary `500` → fallback success; `attempts=2`, served fallback, `failover_reasons=['http_500']`, fallback pool pricing used.
+2. All candidates `500` → `500 api_error`, full refund, no upstream leakage.
+3. All circuits open → `503 api_error` + `Retry-After`, no upstream call, no reservation.
+4. Client abort mid-stream → `partial`, charged, circuit stays closed, zero `recordFailure`.
+5. Upstream cut mid-stream → `partial` by default / `error` with `PARTIAL_BILLING_UPSTREAM_BREAK=refund`; no failover after headers.
+6. Deprecated alias redirect still fails over and sets `X-Morphic-Warning`.
+7. Non-stream unusable body (`invalid_body`) fails over to a valid fallback.
+
+Verification (2026-10-22):
+
+- New file: **7/7 pass**.
+- Full API suite: **307 tests, 305 pass, 2 fail** — only the known `P1-04` and Duitku environment cases.
+- `pnpm -w typecheck`: 4/4.
+- `lint`: 0 errors, 68 pre-existing warnings.
+- Existing `anthropic.test.ts`: 11/11.
+
+Deviations / observed:
+
+- **Attempt exhaustion keeps the Phase 2 mapping.** Two candidates that both return `500` produce `500 api_error`, not a literal `503`; `503` is the all-circuits-open / no-usable-candidate path. Phase 3's “all fail → 503” wording is therefore satisfied by the circuit path, not by attempt exhaustion. Owner decision if a literal 503 is required.
+- **`usage_records.provider_id` remains null.** `settle()` does not accept a provider id; `request_logs.served_provider_id` is the authoritative served-provider record. Fixing this needs `packages/db/src/billing.ts` (pooling-owned).
+- **Claude Code 20+ step E2E is still owner-run.** Part C of `docs/pooling-phase-1e-manual-testing.md` covers it.
+
+Rollback: set `ANTHROPIC_ENABLED=false` to unmount the route, or revert `routes/anthropic.ts` and the new test.
+
 ## 8. Test data hygiene
 
 The API suite writes to the configured test DB and leaves rows behind (users, providers/models, packages, payments, ledger). After each baseline run, test rows are removed and the DB is restored to seed state (1 user, 3 providers, 3 models, seed packages).
 
 Do not point `DATABASE_URL` in `.env.test` at production; `test-guard` will reject it unless the host is explicitly allowlisted.
 
-## 9. Handoff — start here for Phase 3
+## 9. Handoff — start here for Phase 4
 
-**State:** Protocol Phases 0–2 and Pooling Phases 0/0.5/1A–1F are **complete and merged to `main`** (2026-10-21). Phase 1G is deferred until 1E has run in production. Phase 3 is now unblocked.
+**State:** Protocol Phases 0–3 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22). Phase 3 is complete in the working tree; commit/merge is pending. Phase 4 is next. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
 
-Modified files:
+Phase 2 modified files (already merged):
 
 - `apps/api/src/app.ts`
 - `apps/api/src/middleware/auth.ts`
@@ -273,7 +324,7 @@ Modified files:
 - `apps/api/src/domain/router.ts` (`totalTimeoutMs` only)
 - `packages/shared/package.json`, `packages/shared/src/index.ts`
 
-New files:
+Phase 2 new files (already merged):
 
 - `apps/api/src/domain/normalize.ts` + `normalize.test.ts`
 - `apps/api/src/domain/stream-finalize.ts` + `stream-finalize.test.ts`
@@ -281,7 +332,11 @@ New files:
 - `apps/api/src/domain/anthropic/{request,response,stream}.ts` + tests
 - `apps/api/src/routes/anthropic.ts` + `anthropic.test.ts`
 - `packages/shared/src/anthropic.ts`
-- `docs/COMPAT_NOTES.md`
+
+Phase 3 changed files (working tree, pending commit):
+
+- `apps/api/src/routes/anthropic.ts` (modified — stream finalize, partial billing, `Retry-After`)
+- `apps/api/src/routes/anthropic-failover.test.ts` (new — 7 tests)
 
 Local config already set (gitignored):
 
@@ -289,17 +344,18 @@ Local config already set (gitignored):
 - `.env` → `ZENMUX_API_KEY`, `ANTHROPIC_DEFAULT_MODEL=deepseek-v4`
 - To use the edge locally, also set `ANTHROPIC_ENABLED=true` (route is unmounted otherwise).
 
-Phase 3 target (AGENTS.md §7):
+Phase 3 delivered (AGENTS.md §7):
 
-- Anthropic completion uses the pooled route plan and provider candidates (after Pooling 1E).
-- All candidates use OpenAI translation in this phase.
+- Anthropic completion uses the pooled route plan and provider candidates.
+- All candidates use OpenAI translation in this phase; no `api_format`.
 - Failover only before headers/first byte.
 - Settle uses the served route's pricing/upstream pricing.
-- Tests: primary fail → fallback; all fail → 503; client abort → no provider failure; partial stream → partial billing.
+- Tests: primary fail → fallback; all candidates fail; all circuits open → 503 + `Retry-After`; client abort → no provider failure; partial stream → partial billing.
+- Full notes and the 7 new tests: §7.3.
 
-Phase 3 is **unblocked**: Pooling 0/0.5 and the 1D route plan / 1E failover loop are in `main`. `domain/completion.ts` already drives both protocols through the pooled route plan.
+Phase 4 is **next**: provider capability matrix, reasoning echo/re-injection, and the `tool_choice: required` downgrade for reasoning models. Pooling 1G remains gated on production observation.
 
-Before live E2E:
+Before live E2E / Phase 4:
 
 - `POOL_ENABLED=false` keeps legacy behavior; set it to `true` only after seeding `model_provider_pool` and verifying parity.
 - point the public model at ZenMux: base `https://zenmux.ai/api/v1`, provider model `deepseek/deepseek-v4.1-flash`, credential `env:ZENMUX_API_KEY`.
@@ -311,8 +367,6 @@ Design around these upstream quirks:
 - upstream `count_tokens` is 404; the local `ceil(chars/4)` estimate is the only path.
 - bad key is 403 (not 401); 402 = `reject_no_credit`.
 - Anthropic TTFB (30 s) is implemented in Pooling 1E via `ANTHROPIC_TTFB_TIMEOUT_MS`.
-
-Known environment-only test failures: `P1-04` (Neon latency vs 60 s window) and `Duitku` (real sandbox + placeholder credentials).
 
 Known environment-only test failures: `P1-04` (Neon latency vs 60 s window) and `Duitku` (real sandbox + placeholder credentials).
 
