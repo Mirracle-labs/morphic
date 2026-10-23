@@ -360,7 +360,7 @@ Refusals:
 - `tool_choice: any` maps to `required` as before, then downgrades to `auto` only when `supportsRequiredToolChoice` is false (derived from `reasoning_echo_required`). This keeps the mapping unchanged for every other entry and for the OpenAI edge.
 - `max_tokens` clamps to `min(route.contextLength, route.maxOutputTokens)` when an output cap is declared.
 
-Single-node limitation: a restart or a different node loses the cache. Pooling Phase 2 must revisit this (shared Redis was explicitly out of scope for Phase 4).
+Single-node limitation: a restart or a different node loses the cache. Pooling Phase 2 audited this and did not fix it; sticky routing or a Redis-backed cache is the documented follow-up (see §7.5 and `docs/MULTI_NODE_AUDIT.md`).
 
 Scope limits: the cache is consulted only by the Anthropic request translator. An OpenAI client that drops `reasoning_content` on a tool loop can still hit the upstream 400; wiring the same cache into the OpenAI edge is a separate decision. `supports_parallel_tools` and `usage_in_stream` are stored/returned but not enforced per request.
 
@@ -496,11 +496,11 @@ The API suite writes to the configured test DB and leaves rows behind (users, pr
 
 Do not point `DATABASE_URL` in `.env.test` at production; `test-guard` will reject it unless the host is explicitly allowlisted.
 
-## 9. Handoff — start here for Phase 4
+## 9. Handoff — start here for Pooling 1G / optional Phase 5
 
 **State:** Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F **and Phase 2A–2C** are **complete** (2026-10-23) on `feature/api-implementation`. `main` remains `origin/main`. Pooling 1G is deferred until 1E has run in production; Protocol Phase 5 (native Anthropic) is not started.
 
-Phase 2 modified files (already merged):
+Protocol Phase 2 modified files (already merged):
 
 - `apps/api/src/app.ts`
 - `apps/api/src/middleware/auth.ts`
@@ -509,7 +509,7 @@ Phase 2 modified files (already merged):
 - `apps/api/src/domain/router.ts` (`totalTimeoutMs` only)
 - `packages/shared/package.json`, `packages/shared/src/index.ts`
 
-Phase 2 new files (already merged):
+Protocol Phase 2 new files (already merged):
 
 - `apps/api/src/domain/normalize.ts` + `normalize.test.ts`
 - `apps/api/src/domain/stream-finalize.ts` + `stream-finalize.test.ts`
@@ -518,7 +518,7 @@ Phase 2 new files (already merged):
 - `apps/api/src/routes/anthropic.ts` + `anthropic.test.ts`
 - `packages/shared/src/anthropic.ts`
 
-Phase 3 changed files (committed on `feature/api-implementation`):
+Protocol Phase 3 changed files (committed on `feature/api-implementation`):
 
 - `apps/api/src/routes/anthropic.ts` (modified — stream finalize, partial billing, `Retry-After`)
 - `apps/api/src/routes/anthropic-failover.test.ts` (new — 7 tests)
@@ -553,19 +553,19 @@ Pooling Phase 2 delivered (full notes: §7.5):
 - Two-node Nginx example, Redis production config, deployment/env docs.
 - Multi-node known limits: reasoning echo cache is per process; no graceful shutdown yet; Redis and Nginx on Server 1 are SPOFs.
 
-**Phase 5 (native Anthropic) is next but explicitly NOT started.** It remains gated on the conditions in `AGENTS.md` §7 and owner approval. Pooling 1G remains gated on production observation.
+**No required protocol or pooling phase remains.** Pooling 1G is the final required cleanup, gated on production observation with `POOL_ENABLED=true`. Protocol Phase 5 (native Anthropic) is optional and has not started; it remains gated on the conditions in `AGENTS.md` §7 and owner approval.
 
 Phase 4 cross-track note: the protocol track was explicitly authorized to make minimal additive changes to `packages/db/src/schema.ts` (pool table only), one new migration, the pool seed, `domain/router.ts`, `domain/completion.ts`, and the two inference routes. `billing.ts`, `circuit-breaker.ts`, circuit/billing semantics, and the pooling Redis client were not changed.
 
-Before live E2E / Phase 4:
+Before live E2E / production rollout:
 
 - `POOL_ENABLED=false` keeps legacy behavior; set it to `true` only after seeding `model_provider_pool` and verifying parity.
 - point the public model at ZenMux: base `https://zenmux.ai/api/v1`, provider model `deepseek/deepseek-v4.1-flash`, credential `env:ZENMUX_API_KEY`.
 
 Design around these upstream quirks:
 
-- `tool_choice: required` → 400 on the reasoning model; Phase 4 needs a per-provider downgrade (`any → auto`).
-- reasoning echo is conditional; Phase 2 drops `thinking` and reasoning deltas. If tool turn 2 fails against DeepSeek, Phase 4 owns re-injection (`reasoning_echo_required`).
+- `tool_choice: required` → 400 on the reasoning model; Phase 4 implements the per-entry downgrade (`any → auto`).
+- reasoning echo is conditional; Phase 4 re-injects `reasoning_content` from the bounded cache when `reasoning_echo_required=true`.
 - upstream `count_tokens` is 404; the local `ceil(chars/4)` estimate is the only path.
 - bad key is 403 (not 401); 402 = `reject_no_credit`.
 - Anthropic TTFB (30 s) is implemented in Pooling 1E via `ANTHROPIC_TTFB_TIMEOUT_MS`.
