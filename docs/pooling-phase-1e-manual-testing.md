@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Scope | Route-plan failover loop, TTFB/total timeouts, Appendix B, partial billing, 1F observability |
-| Code | `feature/api-implementation` (Phase 3 head `952a598`) |
+| Code | `feature/api-implementation` |
 | Part A — automated suite | **Complete** (2026-10-21): 300 API tests, 298 pass; only `P1-04` and Duitku `/create` fail |
 | Part B — staging failover smoke test | **Complete** (All 8 checks PASS) |
 | Part C — owner Claude Code E2E | **Complete** (PASS — Claude Code v2.1.224) |
@@ -49,7 +49,7 @@ The manual checks below are for staging confidence and for the real-Claude-Code 
   - priority `1`: primary provider
   - priority `2`: backup provider
 - [x] Both providers resolve a credential
-- [x] Migrations `0014` and `0015` applied
+- [x] Migrations `0017` and `0018` applied
 - [x] `POOL_ENABLED=true` in the API process
 
 ### Find the model and its candidates
@@ -633,5 +633,5 @@ ORDER BY mpp.priority;
 
 - Set `POOL_ENABLED=false` for an immediate return to legacy candidates.
 - Restore any provider rows changed during testing.
-- Migrations `0014` and `0015` are additive and safe to leave in place.
+- Migrations `0017` and `0018` are additive and safe to leave in place.
 - The seed script is idempotent; remove test rows by `(model_id, provider_id)` if needed.

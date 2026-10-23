@@ -230,11 +230,11 @@ Shipped:
 - **Phase 0** — `lib/sse-sanitize.ts` (usage stripping, model rewrite, generic error payload), wired into streaming + non-stream `v1.ts`; abort miscount fixed in `completion.ts`; `connection: close` removed.
 - **Phase 0.5** — `settle.status = 'partial'`; client-abort and upstream-break billing; `clientGone` / `upstreamBroke` split; `deltaText` includes reasoning deltas.
 - **1A** — fail-fast Redis client options, fail-open store calls, env-derived slot TTL.
-- **1B** — `model_provider_pool` table + migration `0014`, idempotent seed script (skips brand-only `qwen`/`kimi`).
+- **1B** — `model_provider_pool` table + migration `0017_smooth_mister_fear`, idempotent seed script (skips brand-only `qwen`/`kimi`).
 - **1C** — circuit keys per `(providerId, providerModelId)`, single half-open trial, memo, provider aggregate.
 - **1D** — 3-query routing snapshot with TTL/single-flight/stale-if-error, `createRoutePlan`, weighted ordering, deprecation redirect, `CB_LAST_RESORT`.
 - **1E** — route-plan failover loop in shared `completion.ts`, `MAX_POOL_ATTEMPTS`, TTFB/total timeouts, Appendix B error classes, `Retry-After`, trial release, attempts collection.
-- **1F** — `request_logs` pool columns (migration `0015`), `alertProviderProblem` with Redis/in-memory cooldown, failover/circuit/partial metrics.
+- **1F** — `request_logs` pool columns (migration `0018_request_logs_pool_observability`), `alertProviderProblem` with Redis/in-memory cooldown, failover/circuit/partial metrics.
 
 Key env flags (all default safe):
 
@@ -252,7 +252,7 @@ Key env flags (all default safe):
 
 Verification: **300 API tests, 298 pass, 2 fail** — only the known `P1-04` and Duitku environment cases. `typecheck` 4/4, `lint` 0 errors, `shared` 9/9.
 
-Rollback: `POOL_ENABLED=false` returns to legacy candidates immediately. Revert commits for a full rollback; migrations `0014`/`0015` are additive and safe to leave in place.
+Rollback: `POOL_ENABLED=false` returns to legacy candidates immediately. Revert commits for a full rollback; migrations `0017`/`0018` are additive and safe to leave in place.
 
 ## 7.3 Phase 3 implementation notes
 
@@ -292,7 +292,7 @@ Tests:
 Verification (2026-10-22):
 
 - New file: **7/7 pass**.
-- Full API suite: **307 tests, 305 pass, 2 fail** — only the known `P1-04` and Duitku environment cases.
+- Full API suite after the `main` merge: **309 tests, 307 pass, 2 fail** — only the known `P1-04` and Duitku environment cases. (Phase 3 alone was 307/305 before the merge.)
 - `pnpm -w typecheck`: 4/4.
 - `lint`: 0 errors, 68 pre-existing warnings.
 - Existing `anthropic.test.ts`: 11/11.
