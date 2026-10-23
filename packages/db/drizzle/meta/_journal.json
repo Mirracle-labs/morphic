@@ -141,6 +141,13 @@
       "when": 1792684481302,
       "tag": "0019_pool_capability_matrix",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792730008764,
+      "tag": "0020_job_leases",
+      "breakpoints": true
     }
   ]
 }

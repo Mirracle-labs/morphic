@@ -583,6 +583,21 @@ export const adminAuditLog = pgTable(
   (t) => [index('audit_admin_idx').on(t.adminId)],
 );
 
+// ── Background job leases (Pooling Phase 2A) ──────────
+/**
+ * Time-based lease for the five background jobs. A node claims a lease with a
+ * single statement that compares `last_run_at` against the DATABASE clock; the
+ * winner runs the job, every other node skips the tick.
+ *
+ * There is no seed row: the first claim inserts it. Because the lease is consumed
+ * at tick start, a node that dies mid-job simply lets the next interval's winner
+ * run — every job must therefore be safe to run twice.
+ */
+export const jobLeases = pgTable('job_leases', {
+  job: text('job').primaryKey(),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }).notNull(),
+});
+
 // ── Relations ─────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many, one }) => ({
