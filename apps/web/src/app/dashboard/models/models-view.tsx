@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits, CHAT_COMPLETIONS_URL } from '@/lib/utils';
+import { fmtIdrPer1m, fmtMultiplier } from '@/lib/billing-format';
 import { Search, Terminal, Copy, Check, Cpu } from 'lucide-react';
 import { ModelProviderLogo } from '@/components/ProviderLogos';
 
@@ -101,21 +102,21 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t.dashboard.modelsSearchPlaceholder}
             aria-label={t.dashboard.modelsSearchPlaceholder}
-            className="w-full pl-9.5 pr-4 py-2 bg-white border border-neutral-200 rounded-xl text-xs text-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus:border-neutral-950 transition-colors shadow-2xs"
+            className="w-full min-h-11 pl-9.5 pr-4 py-2 bg-white border border-neutral-200 rounded-xl text-xs text-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus:border-neutral-950 transition-colors shadow-2xs"
           />
         </div>
       </div>
 
       {/* Filter Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-white border border-neutral-200/90 shadow-2xs">
-        <div className="flex items-center gap-1.5 overflow-x-auto text-xs py-0.5">
+        <div className="flex max-w-full items-center gap-1.5 overflow-x-auto text-xs py-0.5">
           {capTabs.map((cap) => (
             <button
               key={cap.id}
               type="button"
               aria-pressed={selectedCap === cap.id}
               onClick={() => setSelectedCap(cap.id)}
-              className={`px-3 py-1.5 rounded-xl font-semibold transition-all active:scale-95 cursor-pointer ${
+              className={`min-h-10 shrink-0 whitespace-nowrap px-3.5 rounded-xl font-semibold transition-all active:scale-95 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
                 selectedCap === cap.id
                   ? 'bg-neutral-950 text-white shadow-2xs'
                   : 'text-neutral-600 hover:text-black hover:bg-neutral-100'
@@ -130,8 +131,66 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
         </div>
       </div>
 
+      {/* Below xl the table would hide its multiplier and action columns behind a sideways scroll, so each model becomes a card. */}
+      <ul className="grid gap-3 md:grid-cols-2 xl:hidden">
+        {filtered.map((m: any) => {
+          const isSelected = activeModel.publicModelId === m.publicModelId;
+          const descriptionText = locale === 'en' && m.descriptionEn ? m.descriptionEn : m.description;
+          return (
+            <li
+              key={m.publicModelId}
+              onClick={() => setSelectedModelId(m.publicModelId)}
+              className={`flex flex-col gap-4 rounded-2xl border bg-white p-4 sm:p-5 cursor-pointer transition-colors ${
+                isSelected ? 'border-neutral-950' : 'border-neutral-200 hover:border-neutral-300'
+              }`}
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-neutral-100 border border-neutral-200 flex items-center justify-center shrink-0">
+                  <ModelProviderLogo provider={m.publicModelId || m.providerName} className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-heading font-bold text-base text-neutral-950 leading-snug">{m.displayName}</div>
+                  <code className="mt-1 inline-block max-w-full break-all text-xs font-mono text-neutral-700 bg-neutral-100 px-1.5 py-0.5 rounded">
+                    {m.publicModelId}
+                  </code>
+                </div>
+              </div>
+              {descriptionText && <p className="text-sm text-neutral-600 line-clamp-2">{descriptionText}</p>}
+              <dl className="grid grid-cols-3 gap-3 text-sm">
+                <div>
+                  <dt className="text-xs text-neutral-600">{locale === 'en' ? 'Input' : 'Masuk'}</dt>
+                  <dd className="font-mono font-semibold text-neutral-950">{fmtMultiplier(m.inputCreditsPer1m)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-neutral-600">{locale === 'en' ? 'Output' : 'Keluar'}</dt>
+                  <dd className="font-mono font-semibold text-neutral-950">{fmtMultiplier(m.outputCreditsPer1m)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-neutral-600">{locale === 'en' ? 'Context' : 'Konteks'}</dt>
+                  <dd className="font-mono font-semibold text-neutral-950">{formatCredits(m.contextLength)}</dd>
+                </div>
+              </dl>
+              <div className="mt-auto flex items-center justify-between gap-3 pt-1">
+                <span className="text-xs text-neutral-600 font-mono">≈ {fmtIdrPer1m(m.outputCreditsPer1m)} {locale === 'en' ? 'output' : 'keluar'}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyId(m.publicModelId);
+                  }}
+                  className="inline-flex min-h-10 items-center gap-1.5 px-3.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-900 text-sm font-semibold cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+                >
+                  {copiedId === m.publicModelId ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                  <span>{copiedId === m.publicModelId ? (locale === 'en' ? 'Copied' : 'Tersalin') : locale === 'en' ? 'Copy ID' : 'Salin ID'}</span>
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
       {/* Table of Models (Optimized High-Density Layout) */}
-      <div className="rounded-2xl bg-white border border-neutral-200/90 shadow-2xs overflow-hidden">
+      <div className="hidden xl:block rounded-2xl bg-white border border-neutral-200/90 shadow-2xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -140,18 +199,13 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
                 <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Capabilities' : 'Kemampuan'}</th>
                 <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Status' : 'Status'}</th>
                 <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Context' : 'Konteks'}</th>
-                <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Token Pricing (1M)' : 'Tarif Token (1M)'}</th>
-                <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Daily Estimate' : 'Tarif Harian'}</th>
+                <th className="py-3.5 px-4 font-semibold">{locale === 'en' ? 'Token Multiplier' : 'Multiplier Token'}</th>
                 <th className="py-3.5 px-4 sm:px-5 text-right font-semibold">{locale === 'en' ? 'Action' : 'Aksi'}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100 text-xs">
               {filtered.map((m: any) => {
                 const isSelected = activeModel.publicModelId === m.publicModelId;
-                const dailyRateFormatted =
-                  locale === 'en'
-                    ? (m.dailyRateEn ?? (m.dailyRate ?? 'From Rp 2,500 / day')).replace('/ hari', '/ day')
-                    : (m.dailyRate ?? 'Mulai Rp 2.500 / hari');
                 const descriptionText = locale === 'en' && m.descriptionEn ? m.descriptionEn : m.description;
 
                 return (
@@ -243,22 +297,15 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
                       <div className="space-y-0.5">
                         <div className="text-neutral-600">
                           <span className="text-neutral-400 text-[10px]">{locale === 'en' ? 'Input: ' : 'Masuk: '}</span>
-                          <span className="font-semibold text-neutral-900">{formatCredits(m.inputCreditsPer1m)}</span>
-                          <span className="text-neutral-400 text-[10px] ml-1">kredit</span>
+                          <span className="font-semibold text-neutral-900">{fmtMultiplier(m.inputCreditsPer1m)}</span>
+                          <span className="text-neutral-400 text-[10px] ml-1">≈ {fmtIdrPer1m(m.inputCreditsPer1m)}</span>
                         </div>
                         <div className="text-neutral-600">
                           <span className="text-neutral-400 text-[10px]">{locale === 'en' ? 'Output: ' : 'Keluar: '}</span>
-                          <span className="font-semibold text-neutral-900">{formatCredits(m.outputCreditsPer1m)}</span>
-                          <span className="text-neutral-400 text-[10px] ml-1">kredit</span>
+                          <span className="font-semibold text-neutral-900">{fmtMultiplier(m.outputCreditsPer1m)}</span>
+                          <span className="text-neutral-400 text-[10px] ml-1">≈ {fmtIdrPer1m(m.outputCreditsPer1m)}</span>
                         </div>
                       </div>
-                    </td>
-
-                    {/* Daily Rate */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span className="font-heading font-extrabold text-xs text-neutral-950 font-mono">
-                        {dailyRateFormatted}
-                      </span>
                     </td>
 
                     {/* Action */}
@@ -269,7 +316,7 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
                           e.stopPropagation();
                           copyId(m.publicModelId);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-xs font-semibold transition cursor-pointer shadow-2xs inline-flex items-center gap-1.5 group-hover:border-neutral-300"
+                        className="min-h-9 px-2.5 py-1.5 rounded-lg border border-neutral-200 bg-white hover:bg-neutral-100 text-neutral-700 text-xs font-semibold transition cursor-pointer shadow-2xs inline-flex items-center gap-1.5 group-hover:border-neutral-300"
                         title={t.dashboard.copy}
                       >
                         {copiedId === m.publicModelId ? (
@@ -325,7 +372,7 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
       )}
 
       {/* Terminal cURL Guide (Dynamic for active/selected model) */}
-      <div className="p-6 rounded-3xl bg-neutral-950 text-white border border-neutral-800 shadow-md space-y-3">
+      <div className="p-4 sm:p-6 rounded-3xl bg-neutral-950 text-white border border-neutral-800 shadow-md space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs font-bold text-neutral-200 flex items-center gap-2">
             <Terminal className="h-4 w-4 text-neutral-400" />
@@ -338,7 +385,7 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
           <button
             type="button"
             onClick={() => copyCurl(curlCommand)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-neutral-700/80 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 font-semibold transition cursor-pointer shadow-2xs"
+            className="inline-flex min-h-10 shrink-0 items-center gap-1.5 px-3 rounded-lg border border-neutral-700/80 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 font-semibold transition cursor-pointer shadow-2xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
           >
             {copiedCurl ? (
               <>
@@ -353,7 +400,7 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
             )}
           </button>
         </div>
-        <pre className="p-4 rounded-2xl bg-neutral-900/90 border border-neutral-800/90 text-neutral-200 text-xs overflow-x-auto font-mono leading-relaxed select-all selection:bg-white/20 selection:text-white">
+        <pre className="p-4 rounded-2xl bg-neutral-900/90 border border-neutral-800/90 text-neutral-200 text-xs overflow-x-auto whitespace-pre-wrap break-all sm:whitespace-pre sm:break-normal font-mono leading-relaxed select-all selection:bg-white/20 selection:text-white">
           {curlCommand}
         </pre>
       </div>

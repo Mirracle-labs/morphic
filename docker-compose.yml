@@ -15,14 +15,30 @@ services:
       timeout: 3s
       retries: 10
 
+  # Local development defaults. In production Redis must listen on the private
+  # link only (Tailscale/WireGuard), keep requirepass enabled, and be monitored
+  # for `evicted_keys == 0`. See DEPLOYMENT_VPS.md §4 and docs/MULTI_NODE_AUDIT.md.
   redis:
     image: redis:7-alpine
+    environment:
+      # Password used by `--requirepass` and by the healthcheck below.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-morphic}
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server
+        --maxmemory 32mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --requirepass "$$REDIS_PASSWORD"
     ports:
-      - "6379:6379"
+      # Loopback only: never publish Redis on a public interface.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -34,7 +50,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://morphic:morphic@postgres:5432/morphic
-      REDIS_URL: redis://redis:6379
+      # Must match the Redis service password. URL-encode special characters if
+      # you override REDIS_PASSWORD (e.g. `p@ss` -> `p%40ss`).
+      REDIS_URL: redis://:${REDIS_PASSWORD:-morphic}@redis:6379
     ports:
       - "8787:8787"
     depends_on:

@@ -7,6 +7,7 @@ import type {
   AnthropicToolChoice,
 } from '@morphic/shared/anthropic';
 import { normalizeMessages, repairToolPairs, type ChatMessageLike } from '../normalize';
+import { getReasoningEcho } from './reasoning-cache';
 
 /**
  * Anthropic Messages -> OpenAI Chat Completions translation.
@@ -20,6 +21,17 @@ import { normalizeMessages, repairToolPairs, type ChatMessageLike } from '../nor
 export interface TranslateOptions {
   /** Clamp the client's `max_tokens` (model context / configured output cap). */
   maxTokens?: number;
+  /**
+   * Re-inject cached `reasoning_content` on assistant tool-call turns. Set only
+   * for entries whose capability matrix says `reasoning_echo_required=true`.
+   */
+  reasoningEcho?: boolean;
+  /**
+   * False for entries that reject `tool_choice: required` (reasoning models).
+   * `tool_choice.any` then falls back to `auto`; the mapping is unchanged for
+   * every other entry.
+   */
+  toolChoiceRequiredSupported?: boolean;
 }
 
 type OpenAiPart =
@@ -216,10 +228,25 @@ export function translateAnthropicRequest(
         },
       });
     }
+    // DeepSeek/ZenMux thinking mode requires the reasoning that produced the
+    // tool call to be echoed back. It is cached from our own response, never
+    // taken from the client, and only used when the served entry asks for it.
+    let echoedReasoning: string | null = null;
+    if (options.reasoningEcho && toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        const cached = getReasoningEcho(String(call.id));
+        if (cached) {
+          echoedReasoning = cached;
+          break;
+        }
+      }
+    }
+
     messages.push({
       role: 'assistant',
       content: textParts.join('\n'),
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...(echoedReasoning ? { reasoning_content: echoedReasoning } : {}),
     });
   }
 
@@ -241,7 +268,12 @@ export function translateAnthropicRequest(
   const tools = translateTools(full.tools);
   if (tools) body.tools = tools;
   const toolChoice = translateToolChoice(full.tool_choice);
-  if (tools && toolChoice !== undefined) body.tool_choice = toolChoice;
+  if (tools && toolChoice !== undefined) {
+    body.tool_choice =
+      toolChoice === 'required' && options.toolChoiceRequiredSupported === false
+        ? 'auto'
+        : toolChoice;
+  }
 
   return body;
 }

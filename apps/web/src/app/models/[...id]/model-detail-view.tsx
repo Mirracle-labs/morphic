@@ -8,6 +8,7 @@ import { CHAT_COMPLETIONS_URL } from '@/lib/utils';
 import { GatewayProviderLogo, ModelProviderLogo } from '@/components/ProviderLogos';
 import { providerBrand, type ProviderBrand } from '@/lib/gateway-providers';
 import { makerFromId } from '@/lib/model-maker';
+import { fmtIdrPer1m, fmtMultiplier } from '@/lib/billing-format';
 import type { ModelDetail, ProviderBucket } from '@/lib/model-detail';
 
 const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2';
@@ -50,7 +51,7 @@ function SpanToggle({ span, setSpan, label }: { span: Span; setSpan: (s: Span) =
           type="button"
           aria-pressed={span === s}
           onClick={() => setSpan(s)}
-          className={`rounded-full px-3 py-1 text-xs font-semibold cursor-pointer ${focusRing} ${span === s ? 'bg-neutral-950 text-white' : 'text-neutral-700 hover:text-neutral-950'}`}
+          className={`rounded-full px-3 py-1 pointer-coarse:min-h-11 pointer-coarse:px-4 text-xs font-semibold cursor-pointer ${focusRing} ${span === s ? 'bg-neutral-950 text-white' : 'text-neutral-700 hover:text-neutral-950'}`}
         >
           {s.toUpperCase()}
         </button>
@@ -283,7 +284,7 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
   return (
     <div className="w-full px-4 sm:px-6 pt-28 pb-20 sm:pt-32 sm:pb-24">
       <div className="mx-auto max-w-6xl space-y-6">
-        <Link href="/models" className={`inline-flex items-center gap-1.5 rounded text-sm font-medium text-neutral-800 hover:text-neutral-950 ${focusRing}`}>
+        <Link href="/models" className={`inline-flex min-h-11 items-center gap-1.5 rounded text-sm font-medium text-neutral-800 hover:text-neutral-950 ${focusRing}`}>
           <ArrowLeft className="h-4 w-4" /> {en ? 'Back to Models' : 'Kembali ke Model'}
         </Link>
 
@@ -436,8 +437,8 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
                         </>
                       ) : (
                         <>
-                          <td className={`${td} text-right`}>{compact.format(model.inputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
-                          <td className={`${td} text-right`}>{compact.format(model.outputCreditsPer1m)} <span className="text-neutral-600">{en ? 'credits' : 'kredit'}</span></td>
+                          <td className={`${td} text-right`}>{fmtMultiplier(model.inputCreditsPer1m, en)} <span className="text-neutral-600">{fmtIdrPer1m(model.inputCreditsPer1m)}</span></td>
+                          <td className={`${td} text-right`}>{fmtMultiplier(model.outputCreditsPer1m, en)} <span className="text-neutral-600">{fmtIdrPer1m(model.outputCreditsPer1m)}</span></td>
                         </>
                       )}
                       <td className={`${td} text-right`}>{model.contextLength ? compact.format(model.contextLength) : '—'}</td>

@@ -1,6 +1,6 @@
 # AGENTS.md — Morphic API Protocol Track
 
-Status: Phase 0, Phase 1 and Phase 2 complete (working tree, uncommitted); Phase 3 not started.
+Status: Protocol Phases 0–4, Pooling Phases 0/0.5/1A–1F, and Pooling Phase 2 (A/B/C, multi-server) complete. Pooling 1G is deferred until 1E runs in production. Protocol Phase 5 (native Anthropic) is not started.
 Repo: `/home/rose/projects/morphic`.
 Scope: inbound protocol compatibility for the Hono gateway.
 
@@ -20,22 +20,30 @@ If the two plans conflict, **stop and ask**. Do not silently pick one.
 
 - Hono 4.9 + `@hono/node-server`, pnpm monorepo, Drizzle/Postgres, Redis.
 - `apps/api/src/app.ts`: CORS, request-id, global error handler, route mounts.
-- `apps/api/src/routes/v1.ts`: `POST /v1/chat/completions`, `GET /v1/models`, reserve → provider → settle, failover, SSE passthrough.
-- `apps/api/src/domain/router.ts`: model resolution, `OpenAiCompatibleAdapter`, error normalization, 55 s total timeout.
-- `apps/api/src/middleware/auth.ts`: accepts only `Authorization: Bearer mp-...`.
+- `apps/api/src/routes/v1.ts`: `POST /v1/chat/completions`, `GET /v1/models`, shared `startCompletion`, SSE sanitizer + heartbeat, partial billing.
+- `apps/api/src/domain/router.ts`: routing snapshot + `createRoutePlan`, `OpenAiCompatibleAdapter`, Appendix B error normalization, TTFB/total timeouts.
+- `apps/api/src/domain/completion.ts`: shared resolve → reserve → failover → settle/log loop for OpenAI and Anthropic.
+- `apps/api/src/middleware/auth.ts`: Bearer `mp-...` plus `x-api-key` on inference routes.
 - `packages/shared/src/types.ts`: lenient `chatCompletionRequestSchema`.
 - `packages/shared/src/models.ts`: hardcoded canonical models + aliases.
-- `packages/db/src/schema.ts`: `providers`, `models` with `fallbackProviderId`.
+- `packages/db/src/schema.ts`: `providers`, `models`, `model_provider_pool`, request-log pool fields.
 - Seed providers: DeepSeek, Qwen, Kimi (OpenAI-compatible).
-- No `/v1/messages`, no Anthropic translator, no `count_tokens`, no Anthropic error envelope.
+- `/v1/messages` + `/v1/messages/count_tokens` mounted when `ANTHROPIC_ENABLED=true`, with Anthropic translators and error envelope.
 
-Known protocol gaps:
+Protocol gaps closed by Phase 4:
 
-- `content: null`, `developer` role, empty `tool_calls`, orphan tool pairs are forwarded unchanged.
-- Upstream 4xx (except 401/403/429) becomes 502 generic.
-- SSE passthrough has no guaranteed `[DONE]` and no heartbeat.
-- 10 MB body and 55 s total timeout apply to all routes.
-- No Claude alias mapping; `/v1/models` is DB-only.
+- Capability metadata is now stored per pool entry (`model_provider_pool`, migration 0019); unsupported tools/vision are refused with `400 unsupported_capability` before reserve.
+- `tool_choice: any → required` is downgraded to `auto` only for entries whose matrix says `required` is unsupported.
+- Reasoning echo/re-injection (`reasoning_echo_required`) is implemented with a bounded, per-process TTL cache.
+
+Remaining limitations: official DeepSeek/Qwen/Kimi provider matrix rows are still unverified without API keys; the reasoning cache is single-node only.
+
+Pooling Phase 2 (multi-server) shipped on 2026-10-23:
+
+- Background jobs now claim a `job_leases` row (migration `0020_job_leases`) through `lib/job-lease.ts`; `JOB_LEASE_ENABLED=false` is the single-node escape hatch. All five jobs were audited as idempotent (P13); no job body changed.
+- `REQUIRE_REDIS=true` refuses to boot without `REDIS_URL`; default false.
+- Multi-node state inventory, pm2/shutdown findings and SPOFs: `docs/MULTI_NODE_AUDIT.md`; deployment steps: `DEPLOYMENT_VPS.md`; example Nginx: `deploy/nginx/morphic-multi-node.conf.example`.
+- Not fixed: the Phase 4 reasoning echo cache remains per process (sticky routing/Redis needed before routing `reasoning_echo_required` traffic to two nodes); no SIGTERM/drain handler yet; `sweepStaleDuitkuPayments` can make redundant gateway calls when two nodes tick together (DB effects remain single); Redis and Nginx on Server 1 remain SPOFs. Consolidated caveats: `DEPLOYMENT_VPS.md` §7 and `docs/COMPAT_NOTES.md` §7.5.
 
 ## 3. Locked decisions
 
@@ -298,6 +306,8 @@ Rollback: `ANTHROPIC_ENABLED=false`; unmount route; revert PR.
 
 ### Phase 3 — Pool integration
 
+**Status: complete (2026-10-22).**
+
 After pooling Phase 1E.
 
 - Anthropic completion uses the route plan and provider candidates.
@@ -306,32 +316,52 @@ After pooling Phase 1E.
 - Settle uses served route pricing/upstream pricing.
 - Tests: primary fail → fallback; all fail → 503; client abort → no provider failure; partial stream → partial billing.
 
+Delivered:
+
+- `routes/anthropic.ts` now settles client aborts as `partial` (`client_disconnected`) and upstream breaks per `PARTIAL_BILLING_UPSTREAM_BREAK`; it emits a sanitized `event: error` for mid-stream failures.
+- All-circuits-open returns `503 api_error` with `Retry-After` (1–120 s).
+- `routes/anthropic-failover.test.ts` covers primary → fallback, all candidates failing, all circuits open, client abort, upstream cut, deprecated redirect, and `invalid_body` failover (7 tests).
+- Attempt exhaustion keeps the Phase 2 5xx mapping (`500 api_error` / `529`); the Phase 3 “all fail → 503” path is all-circuits-open / no usable candidate. Owner decision if a literal 503 is required.
+- `usage_records.provider_id` remains null (`settle()` does not accept it); `request_logs.served_provider_id` is authoritative.
+
 No `api_format` yet.
 
 ### Phase 4 — Provider quirks and capability matrix
 
+**Status: complete (2026-10-22).**
+
 Focus: open-weight/cheap Chinese models.
 
-Add per provider entry (DB or config):
+Per pool entry (`model_provider_pool`, migration `0019_pool_capability_matrix`):
 
-- `supports_tools`
-- `supports_parallel_tools`
-- `supports_reasoning`
-- `reasoning_echo_required`
-- `supports_vision`
-- `usage_in_stream`
-- `context_length`
-- `max_output_tokens`
-- `api_format` (reserved, default `openai`)
+| Column | Default | Meaning |
+|---|---|---|
+| `supports_tools` | `true` | Entry can serve a request carrying `tools`. |
+| `supports_parallel_tools` | `true` | Informational; no per-request gate yet. |
+| `supports_reasoning` | `false` | Entry exposes reasoning tokens. |
+| `reasoning_echo_required` | `false` | Entry rejects an assistant tool-call turn without `reasoning_content`. |
+| `supports_vision` | `false` | Entry accepts image input. |
+| `usage_in_stream` | `true` | Informational; the adapter still forces `include_usage`. |
+| `context_length` | `NULL` | Entry limit. Non-null values below `models.context_length` are skipped (D9). |
+| `max_output_tokens` | `NULL` | Entry output cap; used to clamp Anthropic `max_tokens`. |
+| `api_format` | `'openai'` | Reserved for Phase 5. Any value other than `openai` is not routable. |
 
-Behavior:
+Behavior delivered:
 
-- Reject unsupported tools/vision early with a clear 400.
-- `[VERIFY]` reasoning echo for DeepSeek/GLM/Kimi/MiniMax; cache/re-inject only when required.
-- Qwen: test tool calls/stream separately; never assume DeepSeek behavior.
-- Pool must not mix capability-mismatched entries (D9).
+- **Early capability refusal.** Both edges derive `tools` / `vision` from the actual payload and pass `requiredCapabilities` into `createRoutePlan`. If no eligible candidate supports them, the request is refused with `400 unsupported_capability` (OpenAI envelope: `invalid_request_error`; Anthropic: `invalid_request_error`) before reserve. This is separate from `503 provider_not_configured` / `provider_unavailable`.
+- **D9 pool filtering.** Pool entries with `supports_tools=false` / `supports_vision=false`, an unusable `api_format`, or a context shorter than the model are skipped. Legacy candidates use `models.capabilities` permissively: `tools`/`vision` only denied by explicit `no-tools` / `no-vision` tokens.
+- **Reasoning echo.** `apps/api/src/domain/anthropic/reasoning-cache.ts` is a bounded (512 entries, 15 min TTL) per-process cache keyed by sanitized tool-call id. Non-stream and stream translators populate it from `reasoning_content` / `reasoning`; the request translator injects it only when the served entry has `reasoning_echo_required=true`.
+- **`tool_choice: any` downgrade.** For an entry with `reasoning_echo_required=true` (the observable DeepSeek thinking-mode signal), the Anthropic edge sends `auto` instead of `required`. Every other entry keeps `required`; the OpenAI edge is untouched.
+- **Qwen.** Tool calls and streaming are tested separately against the translation path; no DeepSeek-specific fields are assumed.
+- `max_tokens` is clamped to `min(contextLength, maxOutputTokens)` when the entry declares an output cap.
 
-Tests: 10+ turn tool loop with reasoning on/off; Qwen tool call + stream; unsupported vision 400; pool rejects mismatch.
+Tests: `capability-matrix.test.ts` (19), `provider-capabilities.test.ts` (8), `reasoning-cache.test.ts` (5), plus translator additions. Includes 11-turn tool loops with reasoning echo on/off and a stream→next-turn echo. Full suite after Phase 4: **372 tests, 370 pass, 2 fail** (only the known environment cases). The API test glob is now quoted so nested `domain/anthropic/*.test.ts` files are actually discovered.
+
+Known limitations:
+
+- The reasoning cache is in-memory and single-node. Pooling Phase 2 / restarts lose it; the next tool turn then behaves as before the cache existed.
+- `supports_parallel_tools` and `usage_in_stream` are stored/returned on the route but not enforced per request.
+- Official DeepSeek/Qwen/Kimi capability verification is still PENDING (no keys). The ZenMux DeepSeek entry must be flagged manually.
 
 ### Phase 5 — Optional native Anthropic
 
@@ -369,6 +399,11 @@ Do not implement now.
 | `POOL_ENABLED` | false | pooling plan |
 | `MAX_POOL_ATTEMPTS` | 3 | pooling plan |
 | `PARTIAL_BILLING_UPSTREAM_BREAK` | charge | pooling plan |
+| `REASONING_ECHO_TTL_MS` | 900000 | Phase 4 reasoning cache |
+| `REASONING_ECHO_MAX_ENTRIES` | 512 | Phase 4 reasoning cache bound |
+| `JOB_LEASE_ENABLED` | true | Pooling 2A background-job leases (`false` = single-node) |
+| `REQUIRE_REDIS` | false | Pooling 2B fatal boot when `REDIS_URL` is unset |
+| `REDIS_PASSWORD` | `morphic` (compose only) | Pooling 2C local Redis `requirepass` |
 
 ## 9. Commands
 
@@ -397,17 +432,18 @@ curl -N http://localhost:8787/v1/messages ...
 - [ ] OpenAI stream always ends with `[DONE]`; heartbeat works.
 - [ ] `x-api-key` + Bearer both work.
 - [ ] Claude Code 20+ step task succeeds via `/v1/messages`.
-- [ ] Anthropic SDK text/tool/stream tests pass.
-- [ ] `count_tokens` works.
-- [ ] Body/timeout limits enforced with clear errors.
-- [ ] Billing: reserve/settle/partial correct on all paths.
-- [ ] No provider identity/secret leakage.
-- [ ] Typecheck, lint, tests green.
-- [ ] Rollback documented and tested.
+- [x] Anthropic SDK text/tool/stream tests pass.
+- [x] `count_tokens` works.
+- [x] Body/timeout limits enforced with clear errors.
+- [x] Billing: reserve/settle/partial correct on all paths.
+- [x] No provider identity/secret leakage.
+- [x] Typecheck, lint, tests green (API 372 tests, 370 pass; 2 known environment-only failures).
+- [x] Rollback documented and tested (`POOL_ENABLED=false` covered by Phase 4 tests).
 
 ## 11. `[VERIFY]` before coding against it
 
-- Each provider’s tool/parallel-tool/usage/reasoning/vision behavior.
+- Each provider’s tool/parallel-tool/usage/reasoning/vision behavior. ZenMux/DeepSeek verified in `docs/COMPAT_NOTES.md` §4; official DeepSeek/Qwen/Kimi rows remain PENDING.
+- Reasoning echo per official provider. The code path is implemented and covered by tests; only ZenMux/DeepSeek has real evidence (`reasoning_echo_required` must be set manually). PENDING for GLM/Kimi/MiniMax.
 - DeepSeek `/anthropic` field compatibility (only if Phase 5).
 - Claude Code `ANTHROPIC_BASE_URL` join and `ANTHROPIC_MODEL` behavior for the target version.
 - p95 turn duration to tune 180 s.

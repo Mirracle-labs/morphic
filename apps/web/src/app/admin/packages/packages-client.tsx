@@ -10,6 +10,7 @@ export interface PackageRow {
   id: string;
   name: string;
   description: string | null;
+  kind: 'balance' | 'tokens' | 'unlimited';
   creditAllowance: number;
   modelId: string | null;
   durationHours: number | null;
@@ -45,17 +46,25 @@ function PackageFields({ pkg, models, en, withStatus }: { pkg?: PackageRow; mode
         <input id={`${p}-desc`} name="description" defaultValue={pkg?.description ?? ''} placeholder="Unlimited for 24 hours (fair use)" className={input} />
       </div>
       <div>
-        <label htmlFor={`${p}-model`} className={label}>Model</label>
+        <label htmlFor={`${p}-kind`} className={label}>{en ? 'Type' : 'Jenis'}</label>
+        <select id={`${p}-kind`} name="kind" defaultValue={pkg?.kind ?? 'tokens'} className={input}>
+          <option value="tokens">{en ? 'Token pack (all models, multiplier applies, 30 days)' : 'Paket token (semua model, pakai multiplier, 30 hari)'}</option>
+          <option value="balance">{en ? 'Balance top-up (wallet, no expiry)' : 'Top-up balance (saldo, tanpa kedaluwarsa)'}</option>
+          <option value="unlimited">{en ? 'Unlimited pass (one model, daily fair-use tokens)' : 'Unlimited (satu model, kuota fair use per hari)'}</option>
+        </select>
+      </div>
+      <div>
+        <label htmlFor={`${p}-model`} className={label}>{en ? 'Model (unlimited only)' : 'Model (khusus unlimited)'}</label>
         <select id={`${p}-model`} name="modelId" defaultValue={pkg?.modelId ?? ''} className={input}>
-          <option value="">{en ? 'All models (credit pack)' : 'Semua model (paket kredit)'}</option>
+          <option value="">{en ? 'All models' : 'Semua model'}</option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>{m.displayName}</option>
           ))}
         </select>
       </div>
       <div>
-        <label htmlFor={`${p}-allowance`} className={label}>{en ? 'Credit allowance' : 'Jumlah kredit'}</label>
-        <input id={`${p}-allowance`} name="creditAllowance" type="number" min={1} step={1} defaultValue={pkg?.creditAllowance} required placeholder="100000" className={`${input} font-mono`} />
+        <label htmlFor={`${p}-allowance`} className={label}>{en ? 'Tokens (unlimited: per day)' : 'Jumlah token (unlimited: per hari)'}</label>
+        <input id={`${p}-allowance`} name="creditAllowance" type="number" min={1} step={1} defaultValue={pkg?.creditAllowance} required placeholder="10000000" className={`${input} font-mono`} />
       </div>
       <div>
         <label htmlFor={`${p}-duration`} className={label}>{en ? 'Duration (hours)' : 'Durasi (jam)'}</label>

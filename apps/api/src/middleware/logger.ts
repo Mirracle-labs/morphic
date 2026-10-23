@@ -7,12 +7,18 @@ export interface RequestLogInput {
   modelAlias: string;
   resolvedModelId: string | null;
   providerName: string | null;
+  /** Pooling 1F: internal observability, never serialized into a response. */
+  servedProviderId?: string | null;
+  servedProviderModelId?: string | null;
+  attempts?: number | null;
+  failoverReasons?: string[] | null;
+  attemptLatenciesMs?: number[] | null;
   promptTokens: number | null;
   completionTokens: number | null;
   creditsConsumed: number | null;
   latencyMs: number | null;
   gatewayLatencyMs: number | null;
-  status: 'success' | 'error' | 'cancelled';
+  status: 'success' | 'error' | 'cancelled' | 'partial';
   errorType: string | null;
   streamed: boolean;
 }

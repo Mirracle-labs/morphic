@@ -67,7 +67,7 @@ export function SignOutButton({ className, children }: SignOutButtonProps) {
       aria-label={label}
       className={
         className ??
-        'p-2 rounded-xl text-neutral-500 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-60 transition-colors cursor-pointer shrink-0'
+        'p-2 pointer-coarse:p-3 rounded-xl text-neutral-500 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-60 transition-colors cursor-pointer shrink-0'
       }
     >
       {content}

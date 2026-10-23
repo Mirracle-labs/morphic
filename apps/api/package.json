@@ -10,7 +10,7 @@
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --import ./src/lib/test-guard.ts --test --env-file=../../.env.test src/**/*.test.ts"
+    "test": "tsx --import ./src/lib/test-guard.ts --test --env-file=../../.env.test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@hono/node-server": "^1.15.0",

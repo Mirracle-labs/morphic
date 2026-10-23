@@ -12,7 +12,7 @@ export function LanguageToggle() {
         onClick={() => setLocale('id')}
         aria-pressed={locale === 'id'}
         aria-label="Switch to Indonesian"
-        className={`px-2.5 py-1 rounded-full transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
+        className={`px-2.5 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3.5 rounded-full transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
           locale === 'id'
             ? 'bg-white text-neutral-950 shadow-2xs font-bold'
             : 'text-neutral-500 hover:text-neutral-900 font-medium'
@@ -26,7 +26,7 @@ export function LanguageToggle() {
         onClick={() => setLocale('en')}
         aria-pressed={locale === 'en'}
         aria-label="Switch to English"
-        className={`px-2.5 py-1 rounded-full transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
+        className={`px-2.5 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3.5 rounded-full transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
           locale === 'en'
             ? 'bg-white text-neutral-950 shadow-2xs font-bold'
             : 'text-neutral-500 hover:text-neutral-900 font-medium'

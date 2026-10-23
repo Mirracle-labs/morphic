@@ -156,13 +156,15 @@ export const models = pgTable(
     description: text('description'),
     contextLength: integer('context_length').notNull(),
     capabilities: jsonb('capabilities').$type<string[]>().notNull().default([]),
-    inputCreditsPer1m: integer('input_credits_per_1m').notNull(),
-    outputCreditsPer1m: integer('output_credits_per_1m').notNull(),
+    inputCreditsPer1m: bigint('input_credits_per_1m', { mode: 'number' }).notNull(),
+    outputCreditsPer1m: bigint('output_credits_per_1m', { mode: 'number' }).notNull(),
     // Upstream price in CREDITS per 1M tokens (same unit as the sell price above), for margin tracking.
-    providerCostInputPer1m: integer('provider_cost_input_per_1m'),
-    providerCostOutputPer1m: integer('provider_cost_output_per_1m'),
+    providerCostInputPer1m: bigint('provider_cost_input_per_1m', { mode: 'number' }),
+    providerCostOutputPer1m: bigint('provider_cost_output_per_1m', { mode: 'number' }),
     status: text('status', { enum: ['active', 'inactive', 'deprecated'] }).notNull().default('active'),
     replacementModelAlias: text('replacement_model_alias'),
+    // DEPRECATED (Pooling Phase 1B). Legacy single-fallback wiring, kept for one transition
+    // period: it is read only when a model has zero enabled model_provider_pool rows (plan D2).
     fallbackProviderId: uuid('fallback_provider_id').references(() => providers.id, {
       onDelete: 'set null',
     }),
@@ -170,6 +172,73 @@ export const models = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [index('models_provider_idx').on(t.providerId)],
+);
+
+/**
+ * Provider pool (Pooling Phase 1B): ordered upstream candidates for one public model.
+ *
+ * D9 parity invariant: every ENABLED row must serve its model at a context window of at
+ * least `models.context_length` and support ALL of `models.capabilities`. This is checked
+ * when seeding/administering the pool (the seed has a D9 preview).
+ *
+ * Protocol Phase 4 stores the capability matrix per entry (not per provider): the same
+ * provider can need different flags per model. At request time the route plan also skips
+ * entries whose declared context is below the model's and entries that cannot serve the
+ * tools/vision the request actually uses, so a pool that mixes incompatible entries can
+ * never serve a tool or vision request from the wrong one.
+ *
+ * D10: UNIQUE(model_id, provider_id) means a provider can appear at most once per model
+ * (no two keys/accounts of the same provider for one model).
+ */
+export const modelProviderPool = pgTable(
+  'model_provider_pool',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    modelId: uuid('model_id')
+      .notNull()
+      .references(() => models.id, { onDelete: 'restrict' }),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'restrict' }),
+    // The model string this specific provider expects (may differ per provider).
+    providerModelId: text('provider_model_id').notNull(),
+    // Lower priority is tried first; equal priority is spread by weight.
+    priority: integer('priority').notNull(),
+    weight: integer('weight').notNull().default(100),
+    isEnabled: boolean('is_enabled').notNull().default(true),
+    // Optional upstream-cost override, in credits per 1M tokens. Applies only when BOTH
+    // columns are non-null; otherwise the model-level provider_cost_* values are used
+    // (the same rule as today's ResolvedRoute.upstreamPricing).
+    costInputPer1m: integer('cost_input_per_1m'),
+    costOutputPer1m: integer('cost_output_per_1m'),
+    // Per-entry override for slow first-token models (streaming only).
+    ttfbTimeoutMs: integer('ttfb_timeout_ms'),
+    // Informational tag only; no automatic enforcement in this phase.
+    dataPolicy: text('data_policy'),
+    // Protocol Phase 4 capability matrix. Defaults are backward compatible: an existing
+    // row keeps accepting tools, keeps rejecting vision requests (nothing claimed it
+    // before), and keeps using OpenAI translation.
+    supportsTools: boolean('supports_tools').notNull().default(true),
+    supportsParallelTools: boolean('supports_parallel_tools').notNull().default(true),
+    supportsReasoning: boolean('supports_reasoning').notNull().default(false),
+    // True when this reasoning model rejects an assistant tool-call turn that omits
+    // `reasoning_content`. The Anthropic edge re-injects it from a bounded TTL cache.
+    reasoningEchoRequired: boolean('reasoning_echo_required').notNull().default(false),
+    supportsVision: boolean('supports_vision').notNull().default(false),
+    usageInStream: boolean('usage_in_stream').notNull().default(true),
+    // Entry-level limits. NULL means "not declared / inherit the model-level value".
+    contextLength: integer('context_length'),
+    maxOutputTokens: integer('max_output_tokens'),
+    // Reserved for Protocol Phase 5 (native Anthropic). Phase 4 only routes `openai`.
+    apiFormat: text('api_format', { enum: ['openai', 'anthropic'] }).notNull().default('openai'),
+    createdAt: now(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('model_provider_pool_model_provider_unique').on(t.modelId, t.providerId),
+    index('model_provider_pool_model_priority_idx').on(t.modelId, t.priority),
+    check('model_provider_pool_api_format_check', sql`${t.apiFormat} IN ('openai','anthropic')`),
+  ],
 );
 
 // ── Request Logs (Observability) ─────────────────────
@@ -184,12 +253,19 @@ export const requestLogs = pgTable(
     modelAlias: text('model_alias').notNull(),
     resolvedModelId: uuid('resolved_model_id').references(() => models.id, { onDelete: 'set null' }),
     providerName: text('provider_name'),
+    // Pooling 1F observability (internal only; never returned to clients).
+    servedProviderId: uuid('served_provider_id'),
+    servedProviderModelId: text('served_provider_model_id'),
+    attempts: integer('attempts'),
+    failoverReasons: jsonb('failover_reasons').$type<string[]>(),
+    attemptLatenciesMs: jsonb('attempt_latencies_ms').$type<number[]>(),
     promptTokens: integer('prompt_tokens'),
     completionTokens: integer('completion_tokens'),
     creditsConsumed: bigint('credits_consumed', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
     gatewayLatencyMs: integer('gateway_latency_ms'),
-    status: text('status', { enum: ['success', 'error', 'cancelled'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` needs no migration.
+    status: text('status', { enum: ['success', 'error', 'cancelled', 'partial'] }).notNull(),
     errorType: text('error_type'),
     streamed: boolean('streamed').notNull().default(false),
     createdAt: now(),
@@ -287,6 +363,9 @@ export const packages = pgTable('packages', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull().unique(),
   description: text('description'),
+  // balance: credits added to the wallet. tokens: any-model token pack (credits, multiplier applies).
+  // unlimited: one model, creditAllowance = raw tokens per day (fair use), no multiplier.
+  kind: text('kind', { enum: ['balance', 'tokens', 'unlimited'] }).notNull().default('balance'),
   creditAllowance: bigint('credit_allowance', { mode: 'number' }).notNull(),
   modelId: uuid('model_id').references(() => models.id, { onDelete: 'set null' }),
   durationHours: integer('duration_hours'),
@@ -309,6 +388,9 @@ export const entitlements = pgTable(
     modelId: uuid('model_id').references(() => models.id, { onDelete: 'set null' }),
     allowance: bigint('allowance', { mode: 'number' }).notNull(),
     remaining: bigint('remaining', { mode: 'number' }).notNull(),
+    // Unlimited pass: `remaining` is today's fair-use tokens, refilled to `allowance` at `resetsAt`.
+    unlimited: boolean('unlimited').notNull().default(false),
+    resetsAt: timestamp('resets_at', { withTimezone: true }),
     source: text('source', { enum: ['purchase', 'redeem', 'admin', 'promotion'] }).notNull(),
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -342,12 +424,17 @@ export const usageRecords = pgTable(
     // Null when the model has no provider cost configured.
     upstreamCostCredits: bigint('upstream_cost_credits', { mode: 'number' }),
     latencyMs: integer('latency_ms'),
-    status: text('status', { enum: ['success', 'error'] }).notNull(),
+    // TS-only enum (no PG enum): `partial` = delivered tokens, stream not completed.
+    status: text('status', { enum: ['success', 'error', 'partial'] }).notNull(),
     error: text('error'),
     streamed: boolean('streamed').notNull().default(false),
+    // Client app that sent the request (X-Title, HTTP-Referer or a known User-Agent); null when unknown.
+    app: text('app'),
     createdAt: now(),
   },
-  (t) => [index('usage_user_idx').on(t.userId), index('usage_model_idx').on(t.modelId)],
+  // (user_id, created_at): the dashboard's Logs/Cost/Usage reads filter by user and a time range
+  // and sort newest first; it also serves plain user_id lookups, so it replaces usage_user_idx.
+  (t) => [index('usage_user_created_idx').on(t.userId, t.createdAt), index('usage_model_idx').on(t.modelId)],
 );
 
 // ── Payments ──────────────────────────────────────────
@@ -496,6 +583,21 @@ export const adminAuditLog = pgTable(
   (t) => [index('audit_admin_idx').on(t.adminId)],
 );
 
+// ── Background job leases (Pooling Phase 2A) ──────────
+/**
+ * Time-based lease for the five background jobs. A node claims a lease with a
+ * single statement that compares `last_run_at` against the DATABASE clock; the
+ * winner runs the job, every other node skips the tick.
+ *
+ * There is no seed row: the first claim inserts it. Because the lease is consumed
+ * at tick start, a node that dies mid-job simply lets the next interval's winner
+ * run — every job must therefore be safe to run twice.
+ */
+export const jobLeases = pgTable('job_leases', {
+  job: text('job').primaryKey(),
+  lastRunAt: timestamp('last_run_at', { withTimezone: true }).notNull(),
+});
+
 // ── Relations ─────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many, one }) => ({
@@ -518,6 +620,12 @@ export const modelsRelations = relations(models, ({ one, many }) => ({
   provider: one(providers, { fields: [models.providerId], references: [providers.id] }),
   fallbackProvider: one(providers, { fields: [models.fallbackProviderId], references: [providers.id] }),
   requestLogs: many(requestLogs),
+  providerPool: many(modelProviderPool),
+}));
+
+export const modelProviderPoolRelations = relations(modelProviderPool, ({ one }) => ({
+  model: one(models, { fields: [modelProviderPool.modelId], references: [models.id] }),
+  provider: one(providers, { fields: [modelProviderPool.providerId], references: [providers.id] }),
 }));
 
 export const packagesRelations = relations(packages, ({ one }) => ({
