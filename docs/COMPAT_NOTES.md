@@ -1,7 +1,7 @@
 # Compatibility Notes — Protocol Track
 
-Implementation record for Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F. Owner-run where noted.
-Last updated: 2026-10-22.
+Implementation record for Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F/2A–2C. Owner-run where noted.
+Last updated: 2026-10-23.
 
 Scope: inbound OpenAI/Anthropic compatibility for the Hono gateway (`apps/api`).
 Authoritative plans: `apps/api/plan-pooling-providers.md` (pooling), `apps/api/AGENTS.md` (protocol).
@@ -394,6 +394,102 @@ Phase 4 adds **37 tests**: 19 in `capability-matrix.test.ts`, 8 capability unit 
 
 Rollback: set `POOL_ENABLED=false` to return to legacy routing; revert the Phase 4 commits for the code. Migration `0019` is additive and safe to leave in place (all defaults preserve old behaviour).
 
+## 7.5 Pooling Phase 2 implementation notes (multi-server)
+
+**State:** complete and committed on `feature/api-implementation` (2026-10-23). Pooling Phase 1G and Protocol Phase 5 were **not** started.
+
+### P13 idempotency audit (before wiring leases)
+
+Every job was audited for "what happens if two nodes run the same tick". No job body was rewritten.
+
+| Job | Interval | Safe to run twice? | Evidence |
+|---|---|---|---|
+| `sweepExpiredReservations` | 60 s | **Yes** | `release()` re-reads the reservation under `FOR UPDATE` and no-ops unless `status='reserved'`. Two racing nodes release a row once; the loser sees `settled`/`released`. |
+| request-log retention purge | 24 h | **Yes** | `DELETE … WHERE created_at < cutoff`; a second run deletes fewer or zero rows. |
+| `checkProviderHealth` + `reconcileProviderCircuitStates` | 5 min | **Yes** (one duplicate side effect) | Both are read/compute. `reconcile` writes the same deterministic aggregate per provider (last write wins with an identical value). `checkProviderHealth` cannot double-credit or corrupt data, but its alert cooldown is a per-process `Map`, so two nodes may each send the same provider-error alert once per cooldown window. The lease hides this in normal operation. |
+| `sweepStaleDuitkuPayments` | 60 s | **Yes** | Paid path → `fulfilPayment` → `processPaymentSuccess`, which atomically locks `payments` from an open state to `paid` and credits once; a second run returns `alreadyPaid`, and the purchase ledger reference is unique per payment. Expiry path → `markPaymentIfOpen` (conditional update). This sweep does **not** use `claimPayment`, so two nodes may both call the gateway in one tick, but the DB effects remain single. |
+| `reconcilePaypalPayments` (`reconcileOpenPayments`) | 15 min | **Yes** | Explicitly built for parallel runs: `claimPayment` conditionally sets `reconcile_checked_at` before any gateway call, and terminal transitions use `markPaymentIfOpen`/`processPaymentSuccess`. |
+
+No job blocked rollout. See "Observed, not fixed" for the duplicate-gateway-call nit in the Duitku sweep.
+
+### Job-lease design
+
+- Table `job_leases(job text primary key, last_run_at timestamptz not null)`, migration `0020_job_leases`; no seed.
+- `runLeased(jobName, intervalMs, fn)` in `apps/api/src/lib/job-lease.ts`:
+  - checks a per-process `Set` **before** claiming, so a locally overlapping tick cannot consume the lease;
+  - claims with one statement and the **database clock**:
+    ```sql
+    INSERT INTO job_leases (job, last_run_at) VALUES ($job, now())
+    ON CONFLICT (job) DO UPDATE SET last_run_at = now()
+    WHERE job_leases.last_run_at <= now() - make_interval(secs => $minSecs)
+    RETURNING job
+    ```
+    where `minSecs = 0.8 × intervalMs / 1000` (60 s → 48 s; 15 min → 720 s; 24 h → 69 120 s). Cast to `double precision` explicitly.
+  - a returned row ⇒ run `fn`; no row ⇒ skip silently;
+  - handles both driver shapes: postgres-js returns an array-like RowList, Neon HTTP returns `{ rows }`;
+  - result shape and `make_interval` were verified on the Neon test branch (P3).
+- **Errors:** a lease-query error is logged and the tick is **skipped** (never falls back to running). Duplicate multi-node execution is worse than a missed interval. Job errors are caught and logged so `setInterval` never sees an unhandled rejection; the five wrapped bodies keep their original `.catch`/logging.
+- **Disabled:** `JOB_LEASE_ENABLED=false` claims no lease and runs unconditionally (single-node escape hatch). The in-process guard still applies.
+- **Intervals:** all five keep their existing intervals, bodies, logging and `unref()`. The alert interval's two functions share **one** lease: they are one logical tick, and one lease also avoids duplicate alerts.
+- Lease is consumed at tick start, so a node that dies mid-job lets the next interval's winner run — safe because of the P13 result.
+
+### REQUIRE_REDIS (2B)
+
+- `redisRequirementError(env)` is a pure exported checker; `lib/redis.ts` calls it at module load and exits fatally when `REQUIRE_REDIS=true` and `REDIS_URL` is unset.
+- Only the literal `true` enables it (same convention as `POOL_ENABLED`). Default false.
+- It does **not** make Redis HA: post-boot outages still fail open (D12).
+
+### Multi-node audit (2B)
+
+Full inventory and action list: `docs/MULTI_NODE_AUDIT.md`. Summary:
+
+- Shared when Redis is up: rate-limit counters, concurrency slots, circuit state/trials, provider-problem alert cooldown, payment-stuck alert counters.
+- Per-process by design or accepted: job-lease in-flight Set, circuit open memo (≤2 s, open-only), router snapshot (30 s TTL), aggregate dedupe, log throttles, `reconcileRunning`.
+- **User-visible risk:** the Phase 4 reasoning echo cache is per process. A tool follow-up routed to the other node loses the cached reasoning; entries with `reasoning_echo_required=true` can then be rejected by the upstream. Mitigations: sticky routing by API key, Redis-backed cache, or pin those entries to one node. Not fixed in Phase 2.
+- **pm2/cluster:** no pm2 config, no `node:cluster`/`cluster.fork` in the repo. PM2 is only mentioned as a single-process manager. PM2 cluster mode would make each worker a node; leases still serialise jobs, but `REQUIRE_REDIS=true` becomes mandatory.
+- **Graceful shutdown (P12):** no `SIGTERM`/`SIGINT` handler, no `server.close()`, no drain. Restart cuts SSE streams; unsettled reservations are swept later; interrupted jobs re-run. Recommended handler documented but not implemented (outside the Phase 2 allowlist).
+- **Redis:** single instance on Server 1, 32 MB allkeys-lru, no persistence. `evicted_keys` must stay 0; eviction silently drops counters/circuits. Redis/Server 1 and Nginx/Server 1 remain SPOFs. Two servers on one ISP/power add capacity, not availability.
+
+### Infra and env (2C)
+
+- `DEPLOYMENT_VPS.md` — single-node block kept; two-node upstream, private link, Redis production config, env table, SPOF statement, checklist.
+- `deploy/nginx/morphic-multi-node.conf.example` — `least_conn`, Server 2 `backup`, `proxy_next_upstream error timeout` (no `non_idempotent`), `proxy_buffering off`, `proxy_read_timeout 330s` (= 300 s total + 30 s), `X-Forwarded-For $remote_addr`, `CF-Connecting-IP ""`.
+- `docker-compose.yml` — Redis service only (plus the matching `api.REDIS_URL`): `--maxmemory 32mb --maxmemory-policy allkeys-lru --save ""`, `requirepass` from `REDIS_PASSWORD` (local default `morphic`), loopback-only publish, authenticated healthcheck. Postgres untouched.
+- `.env.example` — `REDIS_PASSWORD`, `JOB_LEASE_ENABLED`, `REQUIRE_REDIS`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `JOB_LEASE_ENABLED` | `true` | DB lease per background job; `false` = single-node escape hatch |
+| `REQUIRE_REDIS` | `false` | Fatal boot when `REDIS_URL` is unset |
+| `REDIS_PASSWORD` | `morphic` (compose only) | `requirepass` for the local Redis service |
+| `REDIS_COMMAND_TIMEOUT_MS` | `100` (docs: `250` for tunnelled Redis) | Redis command timeout |
+
+### Verification (2026-10-23)
+
+| Command | Result |
+|---|---|
+| `pnpm --filter @morphic/db typecheck` | ✅ exit 0 |
+| `pnpm --filter @morphic/api typecheck` | ✅ exit 0 |
+| `pnpm --filter @morphic/api lint` | ✅ 0 errors, 68 pre-existing warnings |
+| `pnpm --filter @morphic/api test` | **386 tests, 384 pass, 2 fail** — only `P1-04` (Neon latency vs 60 s window) and Duitku `/create` (placeholder sandbox credentials) |
+| `pnpm -w typecheck` | ✅ 4/4 packages |
+| `pnpm --filter @morphic/shared test` | ✅ 10/10 |
+| `pnpm test:web` | ✅ 25/25 |
+| Migration `0020_job_leases` on `.env.test` | ✅ applied; columns/PK verified by `job-lease.test.ts` |
+
+Phase 2 adds **14 tests**: 10 in `lib/job-lease.test.ts` (migration shape, two nodes 50 ms apart over 4 intervals, skip + succession, disabled mode, overlap guard, DB-clock vs local-clock skew, lease-error skip, window math, default, job-error reporting) and 4 in `lib/redis.test.ts`.
+
+### Observed, not fixed
+
+- `sweepStaleDuitkuPayments` does not claim rows before calling the gateway (unlike `reconcileOpenPayments`), so two nodes in the same tick may both call Duitku. DB effects stay single (P13); this is a redundant external call, not a correctness bug. Fixing it means editing the job body, which Phase 2A forbids.
+- Graceful shutdown/drain (see above).
+- Reasoning echo cache is single-node (see above).
+- `checkProviderHealth` alert cooldown is per process; one lease avoids duplicates normally, but a lease hiccup can duplicate one alert.
+- Redis remains a SPOF and eviction-sensitive; `evicted_keys` must be monitored.
+- `usage_records.provider_id` remains null (pre-existing; `request_logs.served_provider_id` is authoritative).
+
+Rollback: set `JOB_LEASE_ENABLED=false` (single node behavior, no migration rollback needed), or revert the Phase 2 commits. Migration `0020` is additive; the table can stay unused.
+
 ## 8. Test data hygiene
 
 The API suite writes to the configured test DB and leaves rows behind (users, providers/models, packages, payments, ledger). After each baseline run, test rows are removed and the DB is restored to seed state (1 user, 3 providers, 3 models, seed packages).
@@ -402,7 +498,7 @@ Do not point `DATABASE_URL` in `.env.test` at production; `test-guard` will reje
 
 ## 9. Handoff — start here for Phase 4
 
-**State:** Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F are **complete** (2026-10-22) on `feature/api-implementation`. `main` remains `origin/main`. Pooling 1G is deferred until 1E has run in production; Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
+**State:** Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F **and Phase 2A–2C** are **complete** (2026-10-23) on `feature/api-implementation`. `main` remains `origin/main`. Pooling 1G is deferred until 1E has run in production; Protocol Phase 5 (native Anthropic) is not started.
 
 Phase 2 modified files (already merged):
 
@@ -448,6 +544,14 @@ Phase 4 delivered (full notes: §7.4):
 - D9 filtering in the route plan + seed preview; `api_format` stored/reserved, only `openai` routable.
 - Reasoning echo cache (bounded, TTL, single-node) and the `tool_choice: any → auto` downgrade for `reasoning_echo_required` entries.
 - Qwen tool/stream coverage and 11-turn tool loops with reasoning on/off.
+
+Pooling Phase 2 delivered (full notes: §7.5):
+
+- `job_leases` table + migration `0020_job_leases`; all five background intervals wrapped in `runLeased` (DB clock, 0.8 × interval, per-process overlap guard, `JOB_LEASE_ENABLED`).
+- P13 audit: all five jobs are safe to run twice; no job body was rewritten.
+- `REQUIRE_REDIS` boot guard; multi-node state audit in `docs/MULTI_NODE_AUDIT.md`.
+- Two-node Nginx example, Redis production config, deployment/env docs.
+- Multi-node known limits: reasoning echo cache is per process; no graceful shutdown yet; Redis and Nginx on Server 1 are SPOFs.
 
 **Phase 5 (native Anthropic) is next but explicitly NOT started.** It remains gated on the conditions in `AGENTS.md` §7 and owner approval. Pooling 1G remains gated on production observation.
 

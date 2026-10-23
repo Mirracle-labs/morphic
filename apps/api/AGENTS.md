@@ -1,6 +1,6 @@
 # AGENTS.md — Morphic API Protocol Track
 
-Status: Protocol Phases 0–4 and Pooling Phases 0/0.5/1A–1F complete. Pooling 1G is deferred until 1E runs in production. Pooling Phase 2 (multi-server) and Protocol Phase 5 (native Anthropic) are not started.
+Status: Protocol Phases 0–4, Pooling Phases 0/0.5/1A–1F, and Pooling Phase 2 (A/B/C, multi-server) complete. Pooling 1G is deferred until 1E runs in production. Protocol Phase 5 (native Anthropic) is not started.
 Repo: `/home/rose/projects/morphic`.
 Scope: inbound protocol compatibility for the Hono gateway.
 
@@ -37,6 +37,13 @@ Protocol gaps closed by Phase 4:
 - Reasoning echo/re-injection (`reasoning_echo_required`) is implemented with a bounded, per-process TTL cache.
 
 Remaining limitations: official DeepSeek/Qwen/Kimi provider matrix rows are still unverified without API keys; the reasoning cache is single-node only.
+
+Pooling Phase 2 (multi-server) shipped on 2026-10-23:
+
+- Background jobs now claim a `job_leases` row (migration `0020_job_leases`) through `lib/job-lease.ts`; `JOB_LEASE_ENABLED=false` is the single-node escape hatch. All five jobs were audited as idempotent (P13); no job body changed.
+- `REQUIRE_REDIS=true` refuses to boot without `REDIS_URL`; default false.
+- Multi-node state inventory, pm2/shutdown findings and SPOFs: `docs/MULTI_NODE_AUDIT.md`; deployment steps: `DEPLOYMENT_VPS.md`; example Nginx: `deploy/nginx/morphic-multi-node.conf.example`.
+- Not fixed: the Phase 4 reasoning echo cache remains per process (sticky routing/Redis needed before routing `reasoning_echo_required` traffic to two nodes); no SIGTERM/drain handler yet; Redis and Nginx on Server 1 remain SPOFs.
 
 ## 3. Locked decisions
 
@@ -394,6 +401,9 @@ Do not implement now.
 | `PARTIAL_BILLING_UPSTREAM_BREAK` | charge | pooling plan |
 | `REASONING_ECHO_TTL_MS` | 900000 | Phase 4 reasoning cache |
 | `REASONING_ECHO_MAX_ENTRIES` | 512 | Phase 4 reasoning cache bound |
+| `JOB_LEASE_ENABLED` | true | Pooling 2A background-job leases (`false` = single-node) |
+| `REQUIRE_REDIS` | false | Pooling 2B fatal boot when `REDIS_URL` is unset |
+| `REDIS_PASSWORD` | `morphic` (compose only) | Pooling 2C local Redis `requirepass` |
 
 ## 9. Commands
 
