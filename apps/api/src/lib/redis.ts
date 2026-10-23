@@ -30,6 +30,30 @@ export function redisClientOptions(env: NodeJS.ProcessEnv = process.env): RedisO
   };
 }
 
+/**
+ * Multi-node boot guard (Pooling Phase 2B).
+ *
+ * Without Redis every caller silently falls back to per-process state: rate
+ * limits, concurrency slots, circuit breakers and the half-open trial are then
+ * enforced per node, which is not multi-node safe. `REQUIRE_REDIS=true` turns
+ * that silent degradation into a fatal boot error. Default false keeps local
+ * development and single-node deployments working unchanged.
+ *
+ * Exported as a pure function so tests can cover the decision without killing
+ * the test runner.
+ */
+export function redisRequirementError(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.REQUIRE_REDIS !== 'true') return null;
+  if (env.REDIS_URL) return null;
+  return 'REQUIRE_REDIS=true but REDIS_URL is unset; multi-node state cannot be shared';
+}
+
+const requirementError = redisRequirementError();
+if (requirementError) {
+  console.error(`[redis] FATAL: ${requirementError}`);
+  process.exit(1);
+}
+
 /** Shared Redis client, or null when REDIS_URL is unset (callers fall back to in-process state). */
 function createClient(): Redis | null {
   const url = process.env.REDIS_URL;
