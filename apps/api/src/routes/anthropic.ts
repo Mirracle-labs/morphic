@@ -24,6 +24,11 @@ import {
 import { translateAnthropicRequest } from '../domain/anthropic/request';
 import { translateAnthropicResponse } from '../domain/anthropic/response';
 import { createAnthropicStreamTranslator } from '../domain/anthropic/stream';
+import {
+  rememberReasoningFromCompletion,
+  rememberReasoningFromStream,
+} from '../domain/anthropic/reasoning-echo';
+import { detectAnthropicCapabilities } from '../domain/provider-capabilities';
 import { heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
 
 /**
@@ -81,11 +86,23 @@ function fail(c: Context, status: ContentfulStatusCode, type: AnthropicErrorType
 }
 
 function refusalStatus(
-  reason: 'model_not_found' | 'routing_unavailable' | 'provider_not_configured' | 'provider_unavailable' | 'insufficient_credits',
+  reason:
+    | 'model_not_found'
+    | 'routing_unavailable'
+    | 'provider_not_configured'
+    | 'provider_unavailable'
+    | 'unsupported_capability'
+    | 'insufficient_credits',
 ) {
   switch (reason) {
     case 'model_not_found':
       return { status: 404 as const, type: 'not_found_error' as const, message: 'model not found' };
+    case 'unsupported_capability':
+      return {
+        status: 400 as const,
+        type: 'invalid_request_error' as const,
+        message: 'unsupported capability',
+      };
     case 'provider_unavailable':
       return { status: 503 as const, type: 'api_error' as const, message: 'provider unavailable' };
     case 'routing_unavailable':
@@ -178,7 +195,19 @@ anthropic.post('/messages', async (c) => {
       signal: c.req.raw.signal,
       totalTimeoutMs: totalTimeoutMs(),
       ttfbTimeoutMs: ttfbTimeoutMs(),
-      prepareBody: (route) => translateAnthropicRequest(request, { maxTokens: route.contextLength }),
+      requiredCapabilities: detectAnthropicCapabilities(request),
+      prepareBody: (route) => {
+        const cap = route.maxOutputTokens;
+        const maxTokens =
+          cap != null && cap > 0 ? Math.min(route.contextLength, cap) : route.contextLength;
+        return translateAnthropicRequest(request, {
+          maxTokens,
+          // Only the served entry decides these two behaviours; the mapping
+          // itself stays identical for every other provider.
+          reasoningEcho: route.reasoningEchoRequired,
+          toolChoiceRequiredSupported: route.supportsRequiredToolChoice,
+        });
+      },
       onPlan: (plan) => {
         if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
       },
@@ -196,8 +225,15 @@ anthropic.post('/messages', async (c) => {
       if (result.reason === 'provider_unavailable') {
         c.header('Retry-After', String(retryAfterSeconds(result.retryAfterMs)));
       }
+      // The capability message is safe (it names only what the request asked
+      // for, never a provider), and is more useful than the generic mapping.
       const mapped = refusalStatus(result.reason);
-      return fail(c, mapped.status as ContentfulStatusCode, mapped.type, mapped.message);
+      return fail(
+        c,
+        mapped.status as ContentfulStatusCode,
+        mapped.type,
+        result.reason === 'unsupported_capability' ? result.message : mapped.message,
+      );
     }
     if (result.kind === 'failure') {
       const mapped = failureStatus(result);
@@ -304,6 +340,12 @@ anthropic.post('/messages', async (c) => {
           heartbeat.stop();
         }
 
+        // Cache reasoning only for a complete turn: a broken stream may have
+        // partial tool calls that the client will never send back.
+        if (!clientGone && !upstreamBroke && !upstreamErrorPayload) {
+          rememberReasoningFromStream(translator.state);
+        }
+
         const usage = translator.state.usage;
         const completionTokens =
           usage?.completion_tokens ?? estimatePromptTokens(translator.state.outputText);
@@ -359,6 +401,9 @@ anthropic.post('/messages', async (c) => {
         model: request.model,
         fallbackInputTokens: result.promptTokens,
       });
+      // Remember reasoning for the next tool turn; it is only re-injected when
+      // the next served entry has `reasoning_echo_required=true`.
+      rememberReasoningFromCompletion(upstream);
     } catch {
       await result.finalize({
         promptTokens: result.promptTokens,
