@@ -240,15 +240,20 @@ export async function settle(input: {
   /** Provider's price in credits per 1M tokens; enables upstream-cost / margin tracking. */
   upstreamPricing?: ModelPricing | null;
   requestId: string;
-  status: 'success' | 'error';
+  /**
+   * `partial` is a stream that delivered tokens but did not complete (client
+   * disconnect, upstream break). It is chargeable exactly like `success`.
+   */
+  status: 'success' | 'error' | 'partial';
   error?: string | null;
   latencyMs?: number | null;
   streamed?: boolean;
   app?: string | null;
 }): Promise<{ actualCredits: number; refunded: number; usageRecordId: string; upstreamCostCredits: number | null }> {
+  const chargeable = input.status !== 'error';
   const up = input.upstreamPricing;
   const upstreamCostCredits =
-    input.status === 'success' && up
+    chargeable && up
       ? tokensToCredits(input.promptTokens, up.inputCreditsPer1m) +
         tokensToCredits(input.completionTokens, up.outputCreditsPer1m)
       : null;
@@ -273,7 +278,7 @@ export async function settle(input: {
         : [];
     const pricing = pass ? RAW_TOKEN_PRICING : input.pricing;
     const actual =
-      input.status === 'success'
+      chargeable
         ? tokensToCredits(input.promptTokens, pricing.inputCreditsPer1m) +
           tokensToCredits(input.completionTokens, pricing.outputCreditsPer1m)
         : 0;

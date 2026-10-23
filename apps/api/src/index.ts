@@ -5,6 +5,7 @@ import { sweepExpiredReservations } from '@morphic/db/billing';
 import { lt } from 'drizzle-orm';
 
 import { checkProviderHealth } from './lib/alert';
+import { reconcileProviderCircuitStates } from './domain/circuit-breaker';
 import { reconcilePaypalPayments, sweepStaleDuitkuPayments } from './lib/paypal-reconcile';
 import { assertDuitkuConfig } from './lib/duitku';
 import { assertPaypalConfig } from './lib/paypal';
@@ -48,10 +49,13 @@ const purgeInterval = setInterval(() => {
 }, 24 * 60 * 60_000);
 purgeInterval.unref();
 
-// Observability alert job: monitor provider error rates every 5 minutes (§5.7)
+// Observability alert job: monitor provider error rates every 5 minutes (§5.7).
+// The same tick recomputes the per-provider circuit aggregate (plan 1C), so a
+// transition missed by a crash or Redis eviction self-heals.
 const ALERT_CHECK_INTERVAL_MS = Number(process.env.ALERT_CHECK_INTERVAL_MS ?? 5 * 60_000);
 const alertInterval = setInterval(() => {
   checkProviderHealth().catch((e: unknown) => console.error('[alert] check error:', e));
+  reconcileProviderCircuitStates().catch((e: unknown) => console.error('[circuit-breaker] reconcile error:', e));
 }, ALERT_CHECK_INTERVAL_MS);
 alertInterval.unref();
 
