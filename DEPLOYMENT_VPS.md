@@ -218,7 +218,18 @@ Rekomendasi (belum diimplementasikan, di luar scope Phase 2): handler `SIGTERM` 
 
 ---
 
-## 7. Checklist Sebelum Go-Live di VPS
+## 7. Batasan penting multi-node
+
+Baca bagian ini sebelum memindahkan Server 2 dari `backup` menjadi active-active.
+
+- **Reasoning echo cache masih per-process.** Cache Phase 4 (`domain/anthropic/reasoning-cache.ts`) tidak dibagi antar node. Follow-up tool yang mendarat di node lain kehilangan reasoning yang di-cache; entry dengan `reasoning_echo_required=true` bisa ditolak upstream (`reasoning_content must be passed back`). Sementara gunakan sticky routing per API key, pin traffic tersebut ke satu node, atau pindahkan cache ke Redis.
+- **Belum ada graceful shutdown/drain.** `apps/api/src/index.ts` belum menangani `SIGTERM`/`SIGINT` atau `server.close()`. Restart/deploy memutus SSE yang sedang berjalan; reservation yang belum settle akan dirilis sweep berikutnya; job yang terhenti akan dijalankan ulang pada interval berikutnya (semua job idempotent). Rencanakan restart di luar jam sibuk sampai handler drain diimplementasikan.
+- **`sweepStaleDuitkuPayments` bisa memanggil gateway dua kali.** Dua node yang tick bersamaan dapat sama-sama memanggil Duitku karena sweep ini tidak melakukan `claimPayment` lebih dulu. Efek database tetap sekali (idempotent), jadi ini redundant external call, bukan double-credit. Perbaikan memerlukan perubahan body job dan berada di luar scope Phase 2.
+- **Redis dan Nginx di Server 1 tetap SPOF.** Jika Server 1 mati, kedua node kehilangan Redis bersama dan Nginx tidak bisa meneruskan traffic. Dua server di ISP/power yang sama menambah kapasitas, bukan availability. Upgrade path: managed Redis dan/atau Cloudflare Tunnel dengan connector di tiap server.
+
+Detail lengkap: `docs/MULTI_NODE_AUDIT.md`.
+
+## 8. Checklist Sebelum Go-Live di VPS
 
 1. [ ] Sertifikat SSL/TLS aktif pada domain dan listen di port 443.
 2. [ ] API terikat ke `127.0.0.1`, firewall VPS (UFW) menutup port internal (3001).

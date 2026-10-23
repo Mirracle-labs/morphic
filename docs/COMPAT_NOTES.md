@@ -464,6 +464,15 @@ Full inventory and action list: `docs/MULTI_NODE_AUDIT.md`. Summary:
 | `REDIS_PASSWORD` | `morphic` (compose only) | `requirepass` for the local Redis service |
 | `REDIS_COMMAND_TIMEOUT_MS` | `100` (docs: `250` for tunnelled Redis) | Redis command timeout |
 
+### Important multi-node caveats (read before active-active)
+
+- **Reasoning echo cache is per-process.** A tool follow-up that lands on another node loses the cached reasoning; entries with `reasoning_echo_required=true` may be rejected upstream (`reasoning_content must be passed back`). Use sticky routing by API key, pin those entries to one node, or move the cache to Redis.
+- **No graceful shutdown/drain.** There is no `SIGTERM`/`SIGINT` handler or `server.close()`. Restart/deploy cuts in-flight SSE; unsettled reservations are swept later; interrupted jobs re-run on the next interval (all jobs are idempotent). Plan restarts accordingly until a drain handler lands.
+- **Duitku sweep can make redundant gateway calls.** Two nodes ticking together may both call Duitku because `sweepStaleDuitkuPayments` does not claim rows first. DB effects remain single (idempotent), so this is a redundant external call, not double-credit. Fixing it requires editing the job body and is outside Phase 2.
+- **Redis and Nginx on Server 1 remain SPOFs.** If Server 1 dies, both nodes lose shared Redis and Nginx stops forwarding traffic. Two servers on the same ISP/power add capacity, not availability. Upgrade path: managed Redis and/or Cloudflare Tunnel with a connector per server.
+
+Full detail: `docs/MULTI_NODE_AUDIT.md`.
+
 ### Verification (2026-10-23)
 
 | Command | Result |

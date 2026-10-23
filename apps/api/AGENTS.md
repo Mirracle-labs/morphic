@@ -43,7 +43,7 @@ Pooling Phase 2 (multi-server) shipped on 2026-10-23:
 - Background jobs now claim a `job_leases` row (migration `0020_job_leases`) through `lib/job-lease.ts`; `JOB_LEASE_ENABLED=false` is the single-node escape hatch. All five jobs were audited as idempotent (P13); no job body changed.
 - `REQUIRE_REDIS=true` refuses to boot without `REDIS_URL`; default false.
 - Multi-node state inventory, pm2/shutdown findings and SPOFs: `docs/MULTI_NODE_AUDIT.md`; deployment steps: `DEPLOYMENT_VPS.md`; example Nginx: `deploy/nginx/morphic-multi-node.conf.example`.
-- Not fixed: the Phase 4 reasoning echo cache remains per process (sticky routing/Redis needed before routing `reasoning_echo_required` traffic to two nodes); no SIGTERM/drain handler yet; Redis and Nginx on Server 1 remain SPOFs.
+- Not fixed: the Phase 4 reasoning echo cache remains per process (sticky routing/Redis needed before routing `reasoning_echo_required` traffic to two nodes); no SIGTERM/drain handler yet; `sweepStaleDuitkuPayments` can make redundant gateway calls when two nodes tick together (DB effects remain single); Redis and Nginx on Server 1 remain SPOFs. Consolidated caveats: `DEPLOYMENT_VPS.md` §7 and `docs/COMPAT_NOTES.md` §7.5.
 
 ## 3. Locked decisions
 
