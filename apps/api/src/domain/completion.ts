@@ -11,6 +11,7 @@ import {
   type UpstreamFailureKind,
 } from './router';
 import { recordFailure, recordSuccess, releaseTrial, getCircuitState } from './circuit-breaker';
+import type { RequiredCapability } from './provider-capabilities';
 import { logRequest } from '../middleware/logger';
 import { notifyLowBalance } from '../lib/notify';
 import { alertNegativeMargin } from '../lib/alert';
@@ -46,6 +47,12 @@ export interface StartCompletionInput {
   totalTimeoutMs?: number;
   /** Streaming only: time allowed before response headers. */
   ttfbTimeoutMs?: number;
+  /**
+   * Capabilities the inbound request uses (tools/vision). The route plan filters
+   * pool entries and legacy candidates by them; an unsatisfiable request is
+   * refused before any reservation (Phase 4 / D9).
+   */
+  requiredCapabilities?: readonly RequiredCapability[];
   /** Called once the route plan is built (e.g. to set the deprecation header). */
   onPlan?: (plan: RoutePlan) => void;
   /**
@@ -100,11 +107,14 @@ export interface CompletionRefusal {
     | 'routing_unavailable'
     | 'provider_not_configured'
     | 'provider_unavailable'
+    | 'unsupported_capability'
     | 'insufficient_credits';
   route: ResolvedRoute | null;
   message: string;
   /** Only for `provider_unavailable`; the route plan's earliest circuit reopen. */
   retryAfterMs?: number | null;
+  /** Only for `unsupported_capability`; what the model cannot do. */
+  capabilities?: RequiredCapability[];
 }
 
 export interface CompletionFailure {
@@ -251,7 +261,9 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
 
   let plan: RoutePlan;
   try {
-    const created = await createRoutePlan(publicModelId);
+    const created = await createRoutePlan(publicModelId, {
+      requiredCapabilities: input.requiredCapabilities,
+    });
     if (created.kind === 'not_found') {
       logRequest({
         requestId,
@@ -322,6 +334,41 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
   let route = await plan.next();
   if (!route) {
     // No reservation exists yet, so there is nothing to release.
+    if (plan.unsupportedCapabilities.length > 0) {
+      // The model exists and has usable providers, but none of them can serve the
+      // tools/vision this request uses. This is a client-request problem (400),
+      // not a provider configuration/availability problem.
+      const capabilities = [...plan.unsupportedCapabilities];
+      logRequest({
+        requestId,
+        userId,
+        apiKeyId,
+        modelAlias: publicModelId,
+        resolvedModelId: plan.modelId,
+        providerName: null,
+        servedProviderId: null,
+        servedProviderModelId: null,
+        attempts: 0,
+        failoverReasons: [],
+        attemptLatenciesMs: [],
+        promptTokens: null,
+        completionTokens: null,
+        creditsConsumed: null,
+        latencyMs: Date.now() - startedAt,
+        gatewayLatencyMs: Date.now() - startedAt,
+        status: 'error',
+        errorType: 'unsupported_capability',
+        streamed: wantsStream,
+      });
+      return {
+        kind: 'refusal',
+        reason: 'unsupported_capability',
+        route: null,
+        message: `model does not support ${capabilities.join(' or ')}`,
+        capabilities,
+      };
+    }
+
     if (plan.candidateCount === 0) {
       logRequest({
         requestId,

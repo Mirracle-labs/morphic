@@ -26,6 +26,10 @@ export interface AnthropicStreamState {
   usage: { prompt_tokens?: number; completion_tokens?: number } | null;
   /** Text + tool-argument bytes, used for token estimation when usage is absent. */
   outputText: string;
+  /** Reasoning deltas, cached for providers that require a reasoning echo. */
+  reasoning: string;
+  /** Raw ids of the tool calls seen in this stream (for the reasoning cache). */
+  toolCallIds: string[];
   finishReason: string | null;
   hasToolUse: boolean;
   failed: boolean;
@@ -55,6 +59,8 @@ export function createAnthropicStreamTranslator(
   const state: AnthropicStreamState = {
     usage: null,
     outputText: '',
+    reasoning: '',
+    toolCallIds: [],
     finishReason: null,
     hasToolUse: false,
     failed: false,
@@ -140,6 +146,15 @@ export function createAnthropicStreamTranslator(
     if (typeof choice.finish_reason === 'string') state.finishReason = choice.finish_reason;
 
     const delta = isObject(choice.delta) ? choice.delta : {};
+    // Reasoning is not emitted to Anthropic clients (unsigned thinking blocks can
+    // break Claude Code), but it is remembered for providers that require it to
+    // be echoed on the next tool turn.
+    if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+      state.reasoning += delta.reasoning_content;
+    } else if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) {
+      state.reasoning += delta.reasoning;
+    }
+
     let out = '';
     if (typeof delta.content === 'string' && delta.content.length > 0) {
       out += textDelta(delta.content);
@@ -156,7 +171,10 @@ export function createAnthropicStreamTranslator(
         if (!isObject(rawCall)) continue;
         const index = typeof rawCall.index === 'number' ? rawCall.index : 0;
         const existing = tools.get(index) ?? { id: '', name: '', args: '' };
-        if (typeof rawCall.id === 'string' && rawCall.id.trim()) existing.id = rawCall.id;
+        if (typeof rawCall.id === 'string' && rawCall.id.trim()) {
+          existing.id = rawCall.id;
+          if (!state.toolCallIds.includes(rawCall.id)) state.toolCallIds.push(rawCall.id);
+        }
         const fn = isObject(rawCall.function) ? rawCall.function : {};
         if (typeof fn.name === 'string' && fn.name.trim()) existing.name = fn.name;
         if (typeof fn.arguments === 'string' && fn.arguments.length > 0) {

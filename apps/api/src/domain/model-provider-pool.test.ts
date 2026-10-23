@@ -143,6 +143,16 @@ test('1B: migration created model_provider_pool with the required shape', async 
     cost_output_per_1m: { type: 'integer', nullable: true },
     ttfb_timeout_ms: { type: 'integer', nullable: true },
     data_policy: { type: 'text', nullable: true },
+    // Protocol Phase 4 capability matrix (migration 0019).
+    supports_tools: { type: 'boolean', nullable: false },
+    supports_parallel_tools: { type: 'boolean', nullable: false },
+    supports_reasoning: { type: 'boolean', nullable: false },
+    reasoning_echo_required: { type: 'boolean', nullable: false },
+    supports_vision: { type: 'boolean', nullable: false },
+    usage_in_stream: { type: 'boolean', nullable: false },
+    context_length: { type: 'integer', nullable: true },
+    max_output_tokens: { type: 'integer', nullable: true },
+    api_format: { type: 'text', nullable: false },
     created_at: { type: 'timestamp with time zone', nullable: false },
     updated_at: { type: 'timestamp with time zone', nullable: false },
   };
@@ -194,6 +204,46 @@ test('1B: migration created model_provider_pool with the required shape', async 
         def.includes('(model_id, priority)'),
     ),
     'index (model_id, priority) is missing',
+  );
+});
+
+test('1B/Phase4: capability columns default to the backward-compatible matrix', async () => {
+  const provider = await mkProvider();
+  const model = await mkModel(provider.id);
+  const row = await mkPoolRow(model.id, provider.id);
+
+  assert.equal(row.supportsTools, true);
+  assert.equal(row.supportsParallelTools, true);
+  assert.equal(row.supportsReasoning, false);
+  assert.equal(row.reasoningEchoRequired, false);
+  assert.equal(row.supportsVision, false);
+  assert.equal(row.usageInStream, true);
+  assert.equal(row.contextLength, null);
+  assert.equal(row.maxOutputTokens, null);
+  assert.equal(row.apiFormat, 'openai');
+});
+
+test('1B/Phase4: api_format is constrained to openai|anthropic', async () => {
+  const provider = await mkProvider();
+  const model = await mkModel(provider.id);
+
+  let caught: unknown;
+  try {
+    await db.execute(sql`
+      INSERT INTO model_provider_pool
+        (model_id, provider_id, provider_model_id, priority, api_format)
+      VALUES
+        (${model.id}, ${provider.id}, 'upstream/invalid-format', 1, 'gemini')
+    `);
+  } catch (err) {
+    caught = err;
+  }
+
+  assert.ok(caught, 'an unknown api_format must be rejected by the check constraint');
+  const code = errCode(caught);
+  assert.ok(
+    code === '23514' || /check constraint|model_provider_pool_api_format_check/.test(errMessage(caught)),
+    `expected a check violation, got ${code ?? 'no code'}: ${errMessage(caught)}`,
   );
 });
 
@@ -266,4 +316,21 @@ test('1B: seed file is idempotent, non-destructive, and documents the P11 skips'
   assert.match(executable, /\('qwen'\)/);
   assert.match(executable, /\('kimi'\)/);
   assert.doesNotMatch(executable, /\bTRUNCATE\b|\bDROP TABLE\b|\bDELETE\b/i);
+
+  // Phase 4: the seed populates the capability matrix and previews D9 violations.
+  for (const column of [
+    'supports_tools',
+    'supports_parallel_tools',
+    'supports_reasoning',
+    'reasoning_echo_required',
+    'supports_vision',
+    'usage_in_stream',
+    'context_length',
+    'max_output_tokens',
+    'api_format',
+  ]) {
+    assert.match(executable, new RegExp(`\\b${column}\\b`), `seed must populate ${column}`);
+  }
+  assert.match(seed, /4b\. PREVIEW — D9 parity violations/);
+  assert.match(executable, /m\.capabilities \? 'reasoning'/);
 });
