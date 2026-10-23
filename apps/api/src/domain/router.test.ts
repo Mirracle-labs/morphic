@@ -61,6 +61,7 @@ function seamModel(overrides: Partial<RouterModelSource> & Pick<RouterModelSourc
     publicModelId: overrides.id,
     providerModelId: 'upstream/model',
     contextLength: 8192,
+    capabilities: [],
     inputCreditsPer1m: 10,
     outputCreditsPer1m: 20,
     providerCostInputPer1m: null,
@@ -95,6 +96,15 @@ function seamPool(
     costInputPer1m: null,
     costOutputPer1m: null,
     ttfbTimeoutMs: null,
+    supportsTools: true,
+    supportsParallelTools: true,
+    supportsReasoning: false,
+    reasoningEchoRequired: false,
+    supportsVision: false,
+    usageInStream: true,
+    contextLength: null,
+    maxOutputTokens: null,
+    apiFormat: 'openai',
     ...overrides,
   };
 }

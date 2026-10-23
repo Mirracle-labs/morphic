@@ -4,6 +4,12 @@ import { resolveProviderCredential } from '@morphic/shared/provider-crypto';
 import { normalizeModelId } from '@morphic/shared/models';
 import { checkCircuit, getCircuitState } from './circuit-breaker';
 import { resolveUpstreamTotalTimeoutMs } from '../lib/redis-store';
+import {
+  legacyCapabilities,
+  supportsRequiredCapabilities,
+  supportsRequiredToolChoice,
+  type RequiredCapability,
+} from './provider-capabilities';
 
 export interface ResolvedRoute {
   providerName: string;
@@ -24,6 +30,20 @@ export interface ResolvedRoute {
   isTrial: boolean;
   /** Per-pool-entry time-to-first-byte budget, streaming only (Pooling 1E). */
   ttfbTimeoutMs: number | null;
+  // ── Protocol Phase 4 capability matrix ──────────────────────────────────
+  supportsTools: boolean;
+  supportsParallelTools: boolean;
+  supportsReasoning: boolean;
+  /** The served entry requires `reasoning_content` on an assistant tool-call turn. */
+  reasoningEchoRequired: boolean;
+  supportsVision: boolean;
+  usageInStream: boolean;
+  /** Entry-level output cap; null when not declared. */
+  maxOutputTokens: number | null;
+  /** Reserved for Phase 5; Phase 4 only routes `openai`. */
+  apiFormat: 'openai' | 'anthropic';
+  /** Derived: false when the entry rejects `tool_choice: required`. */
+  supportsRequiredToolChoice: boolean;
 }
 
 // Total attempt timeout: UPSTREAM_TOTAL_TIMEOUT_MS -> UPSTREAM_TIMEOUT_MS -> 55 s (D13).
@@ -120,6 +140,17 @@ function buildRoute(
     attemptIndex: options.isUsingFallback ? 1 : 0,
     isTrial: false,
     ttfbTimeoutMs: null,
+    // Legacy path (still used until Pooling 1G removes it): permissive capability
+    // defaults so behaviour is unchanged outside the pooled route plan.
+    supportsTools: true,
+    supportsParallelTools: true,
+    supportsReasoning: false,
+    reasoningEchoRequired: false,
+    supportsVision: true,
+    usageInStream: true,
+    maxOutputTokens: null,
+    apiFormat: 'openai',
+    supportsRequiredToolChoice: true,
   };
 }
 
@@ -221,6 +252,8 @@ export interface RouterModelSource {
   publicModelId: string;
   providerModelId: string;
   contextLength: number;
+  /** Loose capability claims from the legacy model row (Phase 4 fallback). */
+  capabilities: string[];
   inputCreditsPer1m: number;
   outputCreditsPer1m: number;
   providerCostInputPer1m: number | null;
@@ -250,6 +283,16 @@ export interface RouterPoolSource {
   costInputPer1m: number | null;
   costOutputPer1m: number | null;
   ttfbTimeoutMs: number | null;
+  // Protocol Phase 4 capability matrix.
+  supportsTools: boolean;
+  supportsParallelTools: boolean;
+  supportsReasoning: boolean;
+  reasoningEchoRequired: boolean;
+  supportsVision: boolean;
+  usageInStream: boolean;
+  contextLength: number | null;
+  maxOutputTokens: number | null;
+  apiFormat: 'openai' | 'anthropic';
 }
 
 export interface RouterSnapshotSource {
@@ -285,6 +328,15 @@ interface RouteCandidate {
   weight: number;
   ttfbTimeoutMs: number | null;
   upstreamPricing: RoutePricing | null;
+  // Capability matrix used for per-request filtering and edge behaviour.
+  supportsTools: boolean;
+  supportsParallelTools: boolean;
+  supportsReasoning: boolean;
+  reasoningEchoRequired: boolean;
+  supportsVision: boolean;
+  usageInStream: boolean;
+  maxOutputTokens: number | null;
+  apiFormat: 'openai' | 'anthropic';
 }
 
 const DEFAULT_ROUTER_CACHE_TTL_MS = 30_000;
@@ -338,6 +390,7 @@ async function loadSnapshotFromDb(): Promise<RouterSnapshotSource> {
       publicModelId: s.models.publicModelId,
       providerModelId: s.models.providerModelId,
       contextLength: s.models.contextLength,
+      capabilities: s.models.capabilities,
       inputCreditsPer1m: s.models.inputCreditsPer1m,
       outputCreditsPer1m: s.models.outputCreditsPer1m,
       providerCostInputPer1m: s.models.providerCostInputPer1m,
@@ -365,6 +418,15 @@ async function loadSnapshotFromDb(): Promise<RouterSnapshotSource> {
       costInputPer1m: s.modelProviderPool.costInputPer1m,
       costOutputPer1m: s.modelProviderPool.costOutputPer1m,
       ttfbTimeoutMs: s.modelProviderPool.ttfbTimeoutMs,
+      supportsTools: s.modelProviderPool.supportsTools,
+      supportsParallelTools: s.modelProviderPool.supportsParallelTools,
+      supportsReasoning: s.modelProviderPool.supportsReasoning,
+      reasoningEchoRequired: s.modelProviderPool.reasoningEchoRequired,
+      supportsVision: s.modelProviderPool.supportsVision,
+      usageInStream: s.modelProviderPool.usageInStream,
+      contextLength: s.modelProviderPool.contextLength,
+      maxOutputTokens: s.modelProviderPool.maxOutputTokens,
+      apiFormat: s.modelProviderPool.apiFormat,
     }).from(s.modelProviderPool),
   ]);
 
@@ -473,27 +535,50 @@ function modelUpstreamPricing(model: RouterModelSource): RoutePricing | null {
     : null;
 }
 
+interface CandidateBuild {
+  /** Candidates that can serve every capability this request uses. */
+  candidates: RouteCandidate[];
+  /**
+   * Required capabilities that no eligible candidate supports. Distinguishes
+   * `unsupported_capability` (the model exists but cannot do tools/vision)
+   * from `provider_not_configured` (no usable candidate at all).
+   */
+  unsupportedCapabilities: RequiredCapability[];
+}
+
 /**
  * Candidate list for one model. Pool and legacy sources are mutually exclusive
  * (D2): when `POOL_ENABLED` and the model has at least one enabled pool entry,
  * only pool entries are considered — even if every one of them is filtered out.
+ *
+ * Phase 4 adds three filters on top of Pooling 1D:
+ * - entries reserved for a non-OpenAI `api_format` are skipped (Phase 5);
+ * - entries whose declared context is below the model's are skipped (D9);
+ * - entries that cannot serve the request's tools/vision needs are skipped.
  */
 function buildCandidates(
   snapshot: RouterSnapshot,
   model: RouterModelSource,
   usePool: boolean,
-): RouteCandidate[] {
+  required: readonly RequiredCapability[],
+): CandidateBuild {
   const enabledPool = (snapshot.poolByModelId.get(model.id) ?? []).filter((entry) => entry.isEnabled);
   const modelPricing = modelUpstreamPricing(model);
+  const eligible: RouteCandidate[] = [];
 
   if (usePool && enabledPool.length > 0) {
-    const candidates: RouteCandidate[] = [];
     for (const entry of enabledPool) {
       const provider = snapshot.providers.get(entry.providerId);
       if (!provider || provider.status !== 'active') continue;
       const credential = credentialFor(snapshot, entry.providerId);
       if (!credential) continue;
-      candidates.push({
+      // Phase 4 only serves OpenAI translation. A future Phase 5 entry is not
+      // routable yet; skipping is safer than sending it an OpenAI payload.
+      if (entry.apiFormat !== 'openai') continue;
+      // D9: an entry that declares less context than its model is a misconfigured
+      // pool row. Never serve a request from it; other entries may still qualify.
+      if (entry.contextLength != null && entry.contextLength < model.contextLength) continue;
+      eligible.push({
         providerId: provider.id,
         providerName: provider.name,
         baseUrl: provider.baseUrl,
@@ -506,52 +591,77 @@ function buildCandidates(
           entry.costInputPer1m != null && entry.costOutputPer1m != null
             ? { inputCreditsPer1m: entry.costInputPer1m, outputCreditsPer1m: entry.costOutputPer1m }
             : modelPricing,
+        supportsTools: entry.supportsTools,
+        supportsParallelTools: entry.supportsParallelTools,
+        supportsReasoning: entry.supportsReasoning,
+        reasoningEchoRequired: entry.reasoningEchoRequired,
+        supportsVision: entry.supportsVision,
+        usageInStream: entry.usageInStream,
+        maxOutputTokens: entry.maxOutputTokens ?? null,
+        apiFormat: entry.apiFormat,
       });
     }
-    return candidates;
-  }
-
-  // Legacy path: primary then fallback, never mixed with pool rows.
-  const candidates: RouteCandidate[] = [];
-  const primary = snapshot.providers.get(model.providerId);
-  if (primary && primary.status === 'active') {
-    const credential = credentialFor(snapshot, primary.id);
-    if (credential) {
-      candidates.push({
-        providerId: primary.id,
-        providerName: primary.name,
-        baseUrl: primary.baseUrl,
-        credential,
-        providerModelId: model.providerModelId,
-        priority: 1,
-        weight: 100,
-        ttfbTimeoutMs: null,
-        upstreamPricing: modelPricing,
-      });
-    }
-  }
-
-  if (model.fallbackProviderId && model.fallbackProviderId !== model.providerId) {
-    const fallback = snapshot.providers.get(model.fallbackProviderId);
-    if (fallback && fallback.status === 'active') {
-      const credential = credentialFor(snapshot, fallback.id);
+  } else {
+    // Legacy path: primary then fallback, never mixed with pool rows.
+    const claims = legacyCapabilities(model.capabilities);
+    const legacyMatrix = {
+      supportsTools: claims.supportsTools,
+      supportsParallelTools: true,
+      supportsReasoning: claims.supportsReasoning,
+      reasoningEchoRequired: false,
+      supportsVision: claims.supportsVision,
+      usageInStream: true,
+      maxOutputTokens: null,
+      apiFormat: 'openai' as const,
+    };
+    const primary = snapshot.providers.get(model.providerId);
+    if (primary && primary.status === 'active') {
+      const credential = credentialFor(snapshot, primary.id);
       if (credential) {
-        candidates.push({
-          providerId: fallback.id,
-          providerName: fallback.name,
-          baseUrl: fallback.baseUrl,
+        eligible.push({
+          providerId: primary.id,
+          providerName: primary.name,
+          baseUrl: primary.baseUrl,
           credential,
           providerModelId: model.providerModelId,
-          priority: 2,
+          priority: 1,
           weight: 100,
           ttfbTimeoutMs: null,
           upstreamPricing: modelPricing,
+          ...legacyMatrix,
         });
+      }
+    }
+
+    if (model.fallbackProviderId && model.fallbackProviderId !== model.providerId) {
+      const fallback = snapshot.providers.get(model.fallbackProviderId);
+      if (fallback && fallback.status === 'active') {
+        const credential = credentialFor(snapshot, fallback.id);
+        if (credential) {
+          eligible.push({
+            providerId: fallback.id,
+            providerName: fallback.name,
+            baseUrl: fallback.baseUrl,
+            credential,
+            providerModelId: model.providerModelId,
+            priority: 2,
+            weight: 100,
+            ttfbTimeoutMs: null,
+            upstreamPricing: modelPricing,
+            ...legacyMatrix,
+          });
+        }
       }
     }
   }
 
-  return candidates;
+  const candidates = eligible.filter((candidate) =>
+    supportsRequiredCapabilities(candidate, required),
+  );
+  const unsupportedCapabilities =
+    required.length > 0 && eligible.length > 0 && candidates.length === 0 ? [...required] : [];
+
+  return { candidates, unsupportedCapabilities };
 }
 
 /** Weighted random permutation of one equal-priority group. */
@@ -629,6 +739,11 @@ async function isCircuitBlocked(providerId: string, providerModelId: string): Pr
 export interface RoutePlanOptions {
   /** Injectable RNG for deterministic tests; defaults to Math.random. */
   rng?: () => number;
+  /**
+   * Capabilities the inbound request actually uses. Candidates that cannot
+   * serve every one of them are filtered out (Phase 4 / D9).
+   */
+  requiredCapabilities?: readonly RequiredCapability[];
 }
 
 export interface RoutePlan {
@@ -636,12 +751,25 @@ export interface RoutePlan {
   contextLength: number;
   pricing: RoutePricing;
   deprecationWarning: string | null;
-  /** Filtered candidates before any circuit check. */
+  /** Capability-filtered candidates before any circuit check. */
   candidateCount: number;
+  /**
+   * Required capabilities that no eligible candidate supports. Non-empty means
+   * the request must be refused with `unsupported_capability` (400), not a
+   * provider/configuration 503.
+   */
+  unsupportedCapabilities: RequiredCapability[];
   /** Next candidate whose circuit admits this request, or null when exhausted. */
   next(): Promise<ResolvedRoute | null>;
   /** Earliest reopen time among circuits skipped so far, in ms. */
   retryAfterMs(): number | null;
+}
+
+function normalizeRequiredCapabilities(
+  required: readonly RequiredCapability[] | undefined,
+): RequiredCapability[] {
+  if (!required?.length) return [];
+  return [...new Set(required)];
 }
 
 export type CreateRoutePlanResult = { kind: 'not_found' } | { kind: 'ok'; plan: RoutePlan };
@@ -659,33 +787,35 @@ export async function createRoutePlan(
   if (!requested || requested.status === 'inactive') return { kind: 'not_found' };
 
   const usePool = poolEnabled();
+  const required = normalizeRequiredCapabilities(opts.requiredCapabilities);
   let effective = requested;
-  let candidates = buildCandidates(snapshot, requested, usePool);
+  let build = buildCandidates(snapshot, requested, usePool, required);
   let deprecationWarning =
     requested.status === 'deprecated' ? `model '${publicModelId}' is deprecated` : null;
 
-  // Deprecation redirect: only when the replacement is usable AND at least one of
-  // its candidates has a circuit that is not open. The peek never claims a trial.
+  // Deprecation redirect: only when the replacement is usable for THIS request
+  // (same required capabilities) AND at least one of its candidates has a
+  // circuit that is not open. The peek never claims a trial.
   if (requested.status === 'deprecated' && requested.replacementModelAlias) {
     const replacement = findModel(snapshot, requested.replacementModelAlias);
     if (replacement && replacement.status === 'active') {
-      const replacementCandidates = buildCandidates(snapshot, replacement, usePool);
-      if (replacementCandidates.length > 0) {
+      const replacementBuild = buildCandidates(snapshot, replacement, usePool, required);
+      if (replacementBuild.candidates.length > 0) {
         const blocked = await Promise.all(
-          replacementCandidates.map((candidate) =>
+          replacementBuild.candidates.map((candidate) =>
             isCircuitBlocked(candidate.providerId, candidate.providerModelId),
           ),
         );
         if (blocked.some((isBlocked) => !isBlocked)) {
           effective = replacement;
-          candidates = replacementCandidates;
+          build = replacementBuild;
           deprecationWarning = `model '${publicModelId}' is deprecated; redirected to '${requested.replacementModelAlias}'`;
         }
       }
     }
   }
 
-  const ordered = orderCandidates(candidates, opts.rng ?? Math.random);
+  const ordered = orderCandidates(build.candidates, opts.rng ?? Math.random);
   const modelId = effective.id;
   const contextLength = effective.contextLength;
   const pricing: RoutePricing = {
@@ -714,6 +844,15 @@ export async function createRoutePlan(
     attemptIndex,
     isTrial,
     ttfbTimeoutMs: candidate.ttfbTimeoutMs,
+    supportsTools: candidate.supportsTools,
+    supportsParallelTools: candidate.supportsParallelTools,
+    supportsReasoning: candidate.supportsReasoning,
+    reasoningEchoRequired: candidate.reasoningEchoRequired,
+    supportsVision: candidate.supportsVision,
+    usageInStream: candidate.usageInStream,
+    maxOutputTokens: candidate.maxOutputTokens,
+    apiFormat: candidate.apiFormat,
+    supportsRequiredToolChoice: supportsRequiredToolChoice(candidate),
   });
 
   const plan: RoutePlan = {
@@ -722,6 +861,7 @@ export async function createRoutePlan(
     pricing,
     deprecationWarning,
     candidateCount: ordered.length,
+    unsupportedCapabilities: build.unsupportedCapabilities,
     async next(): Promise<ResolvedRoute | null> {
       const isFirstCall = nextCalls === 0;
       nextCalls += 1;

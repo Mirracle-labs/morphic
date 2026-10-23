@@ -41,6 +41,25 @@
 --    A human must confirm those claims for the fallback provider before relying
 --    on it. Column `model_context_length` / `model_capabilities` are shown in
 --    the preview for that review.
+-- 6b. Protocol Phase 4 capability columns (migration 0019):
+--       supports_tools          = NOT (model_capabilities ? 'no-tools'), i.e. true for
+--                                 every normal model. Absence of a 'tools' token is NOT
+--                                 treated as "no tools" because the model row's
+--                                 capabilities are a loose vocabulary.
+--       supports_parallel_tools = true (informational)
+--       supports_reasoning      = model_capabilities contains 'reasoning'
+--       reasoning_echo_required = false (no verified evidence in this database;
+--                                 set it manually for a thinking-mode entry)
+--       supports_vision         = model_capabilities contains 'vision'. A model that
+--                                 accepts images without claiming 'vision' will start
+--                                 refusing vision requests when POOL_ENABLED flips; set
+--                                 the flag manually before enabling the pool.
+--       usage_in_stream         = true (adapter always requests include_usage)
+--       context_length          = models.context_length (D9 by construction)
+--       max_output_tokens       = NULL (not declared)
+--       api_format              = 'openai' (Phase 4 only routes OpenAI translation)
+--    A model that must NOT accept tools can opt out with the 'no-tools' token in
+--    models.capabilities; the API treats it as a capability denial.
 -- 7. PREFLIGHT P11 (brand-only providers) — exact list for the reviewed
 --    deployment data: `qwen` and `kimi`.
 --      Method: a provider is brand-only when it is catalog-visible (it backs an
@@ -104,6 +123,15 @@ WITH primary_candidates AS (
     NULL::integer       AS cost_output_per_1m,
     NULL::integer       AS ttfb_timeout_ms,
     NULL::text          AS data_policy,
+    (NOT (m.capabilities ? 'no-tools')) AS supports_tools,
+    true                AS supports_parallel_tools,
+    (m.capabilities ? 'reasoning') AS supports_reasoning,
+    false               AS reasoning_echo_required,
+    (m.capabilities ? 'vision')    AS supports_vision,
+    true                AS usage_in_stream,
+    m.context_length    AS context_length,
+    NULL::integer       AS max_output_tokens,
+    'openai'::text      AS api_format,
     m.public_model_id   AS model_public_id,
     p.name              AS provider_name,
     m.context_length    AS model_context_length,
@@ -126,6 +154,15 @@ fallback_candidates AS (
     NULL::integer         AS cost_output_per_1m,
     NULL::integer         AS ttfb_timeout_ms,
     NULL::text            AS data_policy,
+    (NOT (m.capabilities ? 'no-tools')) AS supports_tools,
+    true                  AS supports_parallel_tools,
+    (m.capabilities ? 'reasoning') AS supports_reasoning,
+    false                 AS reasoning_echo_required,
+    (m.capabilities ? 'vision')    AS supports_vision,
+    true                  AS usage_in_stream,
+    m.context_length      AS context_length,
+    NULL::integer         AS max_output_tokens,
+    'openai'::text        AS api_format,
     m.public_model_id     AS model_public_id,
     p.name                AS provider_name,
     m.context_length      AS model_context_length,
@@ -176,6 +213,40 @@ JOIN model_provider_pool p
 ORDER BY c.model_public_id, c.priority, c.provider_name;
 
 -- ----------------------------------------------------------------------------
+-- 4b. PREVIEW — D9 parity violations in the EXISTING pool (Phase 4).
+--
+--   A row is a violation when:
+--   - it declares a context smaller than its model's context_length;
+--   - it denies tools while the model does not explicitly deny them
+--     ('no-tools' in models.capabilities);
+--   - it denies vision while the model claims 'vision'.
+--
+--   These rows are still skipped per request by the route plan for the
+--   capabilities a request actually uses, but they should be fixed (or
+--   disabled) before the pool is trusted:
+--     UPDATE model_provider_pool SET is_enabled = false WHERE id = '<row>';
+-- ----------------------------------------------------------------------------
+SELECT
+  m.public_model_id,
+  p.name                                   AS provider_name,
+  mp.provider_model_id,
+  mp.context_length                        AS entry_context_length,
+  m.context_length                         AS model_context_length,
+  mp.supports_tools,
+  mp.supports_vision,
+  m.capabilities                           AS model_capabilities
+FROM model_provider_pool mp
+JOIN models m ON m.id = mp.model_id
+JOIN providers p ON p.id = mp.provider_id
+WHERE mp.is_enabled
+  AND (
+    (mp.context_length IS NOT NULL AND mp.context_length < m.context_length)
+    OR (NOT (m.capabilities ? 'no-tools') AND NOT mp.supports_tools)
+    OR ((m.capabilities ? 'vision') AND NOT mp.supports_vision)
+  )
+ORDER BY m.public_model_id, p.name;
+
+-- ----------------------------------------------------------------------------
 -- 5. INSERT — idempotent; never updates existing rows.
 -- ----------------------------------------------------------------------------
 INSERT INTO model_provider_pool (
@@ -188,7 +259,16 @@ INSERT INTO model_provider_pool (
   cost_input_per_1m,
   cost_output_per_1m,
   ttfb_timeout_ms,
-  data_policy
+  data_policy,
+  supports_tools,
+  supports_parallel_tools,
+  supports_reasoning,
+  reasoning_echo_required,
+  supports_vision,
+  usage_in_stream,
+  context_length,
+  max_output_tokens,
+  api_format
 )
 SELECT
   c.model_id,
@@ -200,7 +280,16 @@ SELECT
   c.cost_input_per_1m,
   c.cost_output_per_1m,
   c.ttfb_timeout_ms,
-  c.data_policy
+  c.data_policy,
+  c.supports_tools,
+  c.supports_parallel_tools,
+  c.supports_reasoning,
+  c.reasoning_echo_required,
+  c.supports_vision,
+  c.usage_in_stream,
+  c.context_length,
+  c.max_output_tokens,
+  c.api_format
 FROM seed_mpp_candidates c
 WHERE NOT EXISTS (
   SELECT 1 FROM model_provider_pool p

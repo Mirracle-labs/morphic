@@ -9,6 +9,7 @@ import { logRequest } from '../middleware/logger';
 import { apiKeyAuth, gatewayGuards, ipRateLimit } from '../middleware/auth';
 import { appFromRequest } from '../lib/app-attribution';
 import { normalizeRequest } from '../domain/normalize';
+import { detectOpenAiCapabilities } from '../domain/provider-capabilities';
 import { createOpenAiStreamFinalizer, heartbeatMs, startHeartbeat } from '../domain/stream-finalize';
 import { createSseSanitizer } from '../lib/sse-sanitize';
 import { alertProviderProblem } from '../lib/alert';
@@ -265,6 +266,7 @@ v1.post('/chat/completions', async (c) => {
     body: body as unknown as Record<string, unknown>,
     wantsStream,
     signal: c.req.raw.signal,
+    requiredCapabilities: detectOpenAiCapabilities(body as unknown as Record<string, unknown>),
     onPlan: (plan) => {
       if (plan.deprecationWarning) c.header('X-Morphic-Warning', plan.deprecationWarning);
     },
@@ -292,6 +294,18 @@ v1.post('/chat/completions', async (c) => {
       return c.json(
         { error: { message: 'routing unavailable', type: 'server_error', code: 'routing_unavailable' } },
         503,
+      );
+    }
+    if (result.reason === 'unsupported_capability') {
+      return c.json(
+        {
+          error: {
+            message: result.message,
+            type: 'invalid_request_error',
+            code: 'unsupported_capability',
+          },
+        },
+        400,
       );
     }
     if (result.reason === 'provider_not_configured') {
