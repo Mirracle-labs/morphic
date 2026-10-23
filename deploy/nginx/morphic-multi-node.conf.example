@@ -1,0 +1,85 @@
+# Morphic gateway — two-node Nginx example (Pooling Phase 2C)
+#
+# Copy to /etc/nginx/conf.d/morphic.conf and edit:
+#   - server_name
+#   - TLS certificate paths
+#   - the two upstream addresses (private link IPs, e.g. Tailscale 100.x)
+#
+# Server 2 starts as `backup`: it only receives traffic when Server 1's API
+# process fails a health check or refuses connections. Promote it to a normal
+# upstream entry (drop `backup`) only after observing the split.
+#
+# Both API nodes must have the same DATABASE_URL and the same .env secrets, and
+# REQUIRE_REDIS=true with a shared, password-protected Redis over the private
+# link. See docs/MULTI_NODE_AUDIT.md.
+
+upstream morphic_api {
+    least_conn;
+
+    # Server 1 (primary). Private-link address; the API binds to loopback/local.
+    server 100.64.0.1:3001 max_fails=3 fail_timeout=10s;
+
+    # Server 2 (initially backup).
+    server 100.64.0.2:3001 backup max_fails=3 fail_timeout=10s;
+
+    # Reuse upstream connections for non-streaming requests.
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name api.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    # 32 MB Anthropic bodies are buffered to disk by Nginx by default; the body
+    # itself is still limited by the API (MAX_BODY_BYTES / ANTHROPIC_MAX_BODY_BYTES).
+    client_max_body_size 32m;
+
+    location / {
+        proxy_pass http://morphic_api;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # Overwrite, do not append: a client-supplied X-Forwarded-For must never
+        # reach the API and spoof the rate limiter / IP filter.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # This deployment does not use Cloudflare; strip a forged header.
+        proxy_set_header CF-Connecting-IP "";
+
+        # SSE must be forwarded as it is produced. Response buffering would hold
+        # tokens until the buffer fills or the request ends.
+        proxy_buffering off;
+        proxy_cache off;
+
+        proxy_connect_timeout 15s;
+
+        # >= UPSTREAM_TOTAL_TIMEOUT_MS (300000 in the home-server env) + 30s.
+        # Longer than the API's per-attempt timeout so the API owns cancellation
+        # and can settle billing before Nginx gives up.
+        proxy_send_timeout 330s;
+        proxy_read_timeout 330s;
+
+        # Retry only on connection errors and timeouts. NEVER add
+        # `non_idempotent`: that would retry POST /v1/chat/completions and could
+        # dispatch the same completion twice (double upstream cost + double
+        # billing risk). With this setting Nginx does not retry non-idempotent
+        # methods by default.
+        proxy_next_upstream error timeout;
+    }
+}
+
+# Optional: plain HTTP redirect.
+server {
+    listen 80;
+    server_name api.example.com;
+    return 301 https://$host$request_uri;
+}
