@@ -1924,6 +1924,22 @@ curl ${CHAT_URL} \\
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100 text-neutral-700">
+                  <tr id="err-400" className="scroll-mt-36">
+                    <td className="p-3 sm:p-3.5 font-mono font-bold text-neutral-800">
+                      400 Bad Request
+                    </td>
+                    <td className="p-3 sm:p-3.5 font-mono text-neutral-900 font-semibold">
+                      unsupported_capability
+                    </td>
+                    <td className="p-3 sm:p-3.5 text-xs text-neutral-600">
+                      {isId
+                        ? <>Request memakai <code className="font-mono bg-neutral-100 px-1 rounded">tools</code> atau input gambar, tapi tidak ada provider untuk model ini yang mendukungnya.</>
+                        : <>The request uses <code className="font-mono bg-neutral-100 px-1 rounded">tools</code> or image input, but no provider for this model supports it.</>}
+                    </td>
+                    <td className="p-3 sm:p-3.5 text-xs text-neutral-950 font-medium">
+                      {isId ? 'Pilih model dengan kapabilitas tools/vision di halaman Models, atau kirim tanpa tools/gambar.' : 'Pick a model with tools/vision support on the Models page, or send the request without tools/images.'}
+                    </td>
+                  </tr>
                   <tr id="err-401" className="scroll-mt-36">
                     <td className="p-3 sm:p-3.5 font-mono font-bold text-amber-800">
                       401 Unauthorized

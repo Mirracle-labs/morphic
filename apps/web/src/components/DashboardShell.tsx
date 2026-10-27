@@ -266,7 +266,7 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
               className="h-6 sm:h-7 w-auto object-contain"
             />
           </Link>
-          <span className="hidden sm:inline text-xs font-mono text-neutral-600">v1.0</span>
+          <span className="hidden sm:inline text-xs font-mono text-neutral-600">v1.1</span>
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
