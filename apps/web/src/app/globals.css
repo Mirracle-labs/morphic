@@ -530,3 +530,63 @@ table.data td {
 .nav-dark :focus-visible {
   --tw-ring-color: #ffffff;
 }
+
+/* Soft UI scope (dashboard + popups): one radius scale, pill buttons, hairline borders,
+   and low layered shadows. Tailwind radius utilities read these vars, so rounded-* inside
+   the scope pick up the new scale without touching each class. */
+.ui-soft {
+  --radius-md: 0.625rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.75rem;
+}
+
+.ui-soft .shadow-2xs,
+.ui-soft .shadow-xs {
+  --tw-shadow: 0 1px 2px var(--tw-shadow-color, rgb(9 9 11 / 0.04));
+}
+
+/* Elevated surfaces only: modals, drawers, popovers. */
+.ui-soft .shadow-xl,
+.ui-soft .shadow-2xl,
+.ui-soft.shadow-xl {
+  --tw-shadow: 0 1px 2px var(--tw-shadow-color, rgb(9 9 11 / 0.04)),
+    0 24px 56px -20px var(--tw-shadow-color, rgb(9 9 11 / 0.22));
+}
+
+.ui-soft .card {
+  border-radius: var(--radius-2xl);
+  border-color: rgb(228 228 231 / 0.7);
+  box-shadow: 0 1px 2px rgb(9 9 11 / 0.03);
+}
+
+.ui-soft .btn {
+  border-radius: 9999px;
+  padding-inline: 1rem;
+}
+
+.ui-soft .input {
+  border-radius: var(--radius-lg);
+}
+
+.ui-soft .input:focus {
+  border-color: #09090b;
+  box-shadow: 0 0 0 3px rgb(9 9 11 / 0.1);
+}
+
+.ui-soft table.data thead th:first-child {
+  border-top-left-radius: var(--radius-lg);
+}
+
+.ui-soft table.data thead th:last-child {
+  border-top-right-radius: var(--radius-lg);
+}
+
+/* Fixed-height controls are the buttons here (cards and rows size to content), so they go
+   pill without editing every call site.
+   ponytail: matches by height class; a button styled another way keeps its own radius. */
+.ui-soft :is(button, a):is(.h-7, .h-8, .h-9, .h-10, .h-11, .h-12, .min-h-9, .min-h-10, .min-h-11, .min-h-12),
+.ui-soft button:is([aria-pressed], [role='tab']) {
+  border-radius: 9999px;
+}

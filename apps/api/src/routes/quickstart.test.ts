@@ -31,7 +31,8 @@ test('GET /quickstart/opencode.ps1 returns PowerShell script with correct header
   assert.ok(text.includes('opencode quickstart for Windows'));
   assert.ok(text.includes('https://morphic-api.web.id/v1'));
   assert.ok(text.includes('opencode.json'));
-  assert.ok(text.includes('morphic/deepseek-v4'));
+  // The default is the first ready DeepSeek model, else the first ready model: whatever the DB holds.
+  assert.match(text, /model = 'morphic\/[^']+'/);
 });
 
 

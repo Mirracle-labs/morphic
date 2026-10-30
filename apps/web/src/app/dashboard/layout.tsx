@@ -31,7 +31,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
   ]);
 
   return (
-    <DashboardShell session={session} balance={balance} isAdmin={isAdmin} notifications={notifications}>
+    // Only what the shell renders crosses to the client; the session token must not reach the page.
+    <DashboardShell
+      session={{ user: { name: session.user.name, email: session.user.email, image: session.user.image ?? null } }}
+      balance={balance} isAdmin={isAdmin} notifications={notifications}>
       {children}
     </DashboardShell>
   );

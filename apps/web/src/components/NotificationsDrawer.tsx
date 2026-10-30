@@ -1,6 +1,8 @@
+// apps/web/src/components/NotificationsDrawer.tsx
+// TypeScript React / Next.js Client Component / Browser + SSR / Linux x86_64
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Bell, CheckCheck, X } from 'lucide-react';
@@ -19,6 +21,10 @@ const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible
 
 const money = (cents: number, currency: string) =>
   currency === 'USD' ? `$${(cents / 100).toFixed(2)}` : `Rp ${cents.toLocaleString('id-ID')}`;
+
+const dateKeyFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' });
+const shortDateEn = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'Asia/Jakarta' });
+const shortDateId = new Intl.DateTimeFormat('id-ID', { month: 'short', day: 'numeric', timeZone: 'Asia/Jakarta' });
 
 // Model announcement banners. Per maker: the company mark (top), the model family mark (centre) and a
 // three-stop gradient from the brand's own palette (deep, main, light). Marks are LobeHub mono SVGs
@@ -147,6 +153,7 @@ function content(n: NotificationItem, en: boolean): { title: string; body: strin
 
 export function NotificationsDrawer({ items: initial, en }: { items: NotificationItem[] | null; en: boolean }) {
   const [items, setItems] = useState(initial);
+  const [isOpen, setIsOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [tab, setTab] = useState<Tab>('all');
   const [seen, setSeen] = useLocalStorage(SEEN_KEY);
@@ -164,9 +171,9 @@ export function NotificationsDrawer({ items: initial, en }: { items: Notificatio
     return () => clearInterval(id);
   }, []);
 
-  const list = items ?? [];
+  const list = useMemo(() => items ?? [], [items]);
   const isUnread = (n: NotificationItem) => !seen || n.at > seen;
-  const unread = list.filter(isUnread);
+  const unread = useMemo(() => list.filter((n) => !seen || n.at > seen), [list, seen]);
 
   const markAllRead = () => setSeen(new Date().toISOString());
 
@@ -179,12 +186,14 @@ export function NotificationsDrawer({ items: initial, en }: { items: Notificatio
   ];
   const shown = tab === 'all' ? list : tab === 'unread' ? unread : list.filter((n) => n.kind === tab);
 
+  const todayKey = dateKeyFmt.format(new Date());
+  const yesterdayKey = dateKeyFmt.format(new Date(Date.now() - 86_400_000));
   const dayLabel = (iso: string) => {
-    const key = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
     const d = new Date(iso);
-    if (key(d) === key(new Date())) return en ? 'Today' : 'Hari ini';
-    if (key(d) === key(new Date(Date.now() - 86_400_000))) return en ? 'Yesterday' : 'Kemarin';
-    return d.toLocaleDateString(en ? 'en-US' : 'id-ID', { month: 'short', day: 'numeric', timeZone: 'Asia/Jakarta' });
+    const k = dateKeyFmt.format(d);
+    if (k === todayKey) return en ? 'Today' : 'Hari ini';
+    if (k === yesterdayKey) return en ? 'Yesterday' : 'Kemarin';
+    return (en ? shortDateEn : shortDateId).format(d);
   };
 
   return (
@@ -192,6 +201,7 @@ export function NotificationsDrawer({ items: initial, en }: { items: Notificatio
       <button
         type="button"
         onClick={() => {
+          setIsOpen(true);
           dialogRef.current?.showModal();
           refresh();
         }}
@@ -209,101 +219,104 @@ export function NotificationsDrawer({ items: initial, en }: { items: Notificatio
       <dialog
         ref={dialogRef}
         aria-labelledby="notif-title"
+        onClose={() => setIsOpen(false)}
         onClick={(e) => e.target === dialogRef.current && dialogRef.current?.close()}
-        className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-xl bg-white p-0 shadow-2xl backdrop:bg-black/40"
+        className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-xl bg-white p-0 shadow-2xl backdrop:bg-neutral-950/40 sm:my-2 sm:mr-2 sm:h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-1rem)] sm:rounded-3xl sm:border sm:border-neutral-200/70"
       >
-        <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-5 py-4">
-            <h2 id="notif-title" className="text-lg font-semibold text-neutral-950">{en ? 'Notifications' : 'Notifikasi'}</h2>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={markAllRead}
-                disabled={unread.length === 0}
-                className={`inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-sm text-neutral-800 hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${focusRing}`}
-              >
-                <CheckCheck className="h-4 w-4" /> {en ? 'Mark all read' : 'Tandai dibaca'}
-              </button>
-              <button
-                type="button"
-                onClick={() => dialogRef.current?.close()}
-                aria-label={en ? 'Close' : 'Tutup'}
-                className={`w-9 h-9 flex items-center justify-center rounded-lg text-neutral-700 hover:text-neutral-950 hover:bg-neutral-100 cursor-pointer ${focusRing}`}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          <div className="px-5 pt-4">
-            <div role="group" aria-label={en ? 'Filter notifications' : 'Filter notifikasi'} className="flex gap-1 overflow-x-auto rounded-xl border border-neutral-200 bg-neutral-100 p-1">
-              {tabs.map(([id, label, n]) => (
+        {isOpen && (
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-5 py-4">
+              <h2 id="notif-title" className="text-lg font-semibold text-neutral-950">{en ? 'Notifications' : 'Notifikasi'}</h2>
+              <div className="flex items-center gap-1">
                 <button
-                  key={id}
                   type="button"
-                  aria-pressed={tab === id}
-                  onClick={() => setTab(id)}
-                  className={`flex-1 shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${focusRing} ${
-                    tab === id ? 'bg-white font-semibold text-neutral-950 shadow-xs' : 'text-neutral-700 hover:text-neutral-950'
-                  }`}
+                  onClick={markAllRead}
+                  disabled={unread.length === 0}
+                  className={`inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-sm text-neutral-800 hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${focusRing}`}
                 >
-                  {label} <span className="tabular-nums text-neutral-600">{n}</span>
+                  <CheckCheck className="h-4 w-4" /> {en ? 'Mark all read' : 'Tandai dibaca'}
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => dialogRef.current?.close()}
+                  aria-label={en ? 'Close' : 'Tutup'}
+                  className={`w-9 h-9 flex items-center justify-center rounded-lg text-neutral-700 hover:text-neutral-950 hover:bg-neutral-100 cursor-pointer ${focusRing}`}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-5 pt-4">
+              <div role="group" aria-label={en ? 'Filter notifications' : 'Filter notifikasi'} className="flex gap-1 overflow-x-auto rounded-xl border border-neutral-200 bg-neutral-100 p-1">
+                {tabs.map(([id, label, n]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={tab === id}
+                    onClick={() => setTab(id)}
+                    className={`flex-1 shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors cursor-pointer ${focusRing} ${
+                      tab === id ? 'bg-white font-semibold text-neutral-950 shadow-xs' : 'text-neutral-700 hover:text-neutral-950'
+                    }`}
+                  >
+                    {label} <span className="tabular-nums text-neutral-600">{n}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-5">
+              {items === null ? (
+                <p className="py-16 text-center text-sm text-neutral-700">
+                  {en ? 'Notifications could not be loaded. Reload the page to try again.' : 'Notifikasi gagal dimuat. Muat ulang halaman untuk mencoba lagi.'}
+                </p>
+              ) : shown.length === 0 ? (
+                <p className="py-16 text-center text-sm text-neutral-700">
+                  {tab === 'unread'
+                    ? en ? 'You are all caught up.' : 'Semua sudah dibaca.'
+                    : en ? 'Nothing here yet. New models, top-ups and product updates show up here.' : 'Belum ada apa-apa. Model baru, top-up, dan update produk muncul di sini.'}
+                </p>
+              ) : (
+                <ol className="relative ml-10 border-l border-dashed border-neutral-300 space-y-7">
+                  {shown.map((n, i) => {
+                    const c = content(n, en);
+                    const label = dayLabel(n.at);
+                    const firstOfDay = i === 0 || dayLabel(shown[i - 1]!.at) !== label;
+                    const external = c.link && /^https?:\/\//.test(c.link.href);
+                    return (
+                      <li key={n.id} className="relative pl-12">
+                        {firstOfDay ? (
+                          // Day chip sits centred on the timeline line
+                          <span className="absolute left-0 top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-medium text-neutral-800">
+                            {label}
+                          </span>
+                        ) : (
+                          <span aria-hidden="true" className="absolute -left-[3px] top-2 h-1.5 w-1.5 rounded-full bg-neutral-800" />
+                        )}
+                        <h3 className="flex items-center gap-2 text-base font-semibold text-neutral-950">
+                          {isUnread(n) && <span className="h-2 w-2 shrink-0 rounded-full bg-red-600" aria-label={en ? 'Unread' : 'Belum dibaca'} />}
+                          {c.title}
+                        </h3>
+                        {n.type === 'model_new' && <ModelBanner modelId={n.modelId} name={n.name} />}
+                        <p className={`${n.type === 'model_new' ? 'mt-3' : 'mt-1.5'} whitespace-pre-line text-sm text-neutral-800`}>{c.body}</p>
+                        {c.link &&
+                          (external ? (
+                            <a href={c.link.href} target="_blank" rel="noopener noreferrer" className={`mt-3 inline-flex h-9 items-center rounded-lg border border-neutral-300 px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100 ${focusRing}`}>
+                              {c.link.label}
+                            </a>
+                          ) : (
+                            <Link href={c.link.href} onClick={() => dialogRef.current?.close()} className={`mt-3 inline-flex h-9 items-center rounded-lg border border-neutral-300 px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100 ${focusRing}`}>
+                              {c.link.label}
+                            </Link>
+                          ))}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
             </div>
           </div>
-
-          <div className="flex-1 overflow-y-auto px-5 py-5">
-            {items === null ? (
-              <p className="py-16 text-center text-sm text-neutral-700">
-                {en ? 'Notifications could not be loaded. Reload the page to try again.' : 'Notifikasi gagal dimuat. Muat ulang halaman untuk mencoba lagi.'}
-              </p>
-            ) : shown.length === 0 ? (
-              <p className="py-16 text-center text-sm text-neutral-700">
-                {tab === 'unread'
-                  ? en ? 'You are all caught up.' : 'Semua sudah dibaca.'
-                  : en ? 'Nothing here yet. New models, top-ups and product updates show up here.' : 'Belum ada apa-apa. Model baru, top-up, dan update produk muncul di sini.'}
-              </p>
-            ) : (
-              <ol className="relative ml-10 border-l border-dashed border-neutral-300 space-y-7">
-                {shown.map((n, i) => {
-                  const c = content(n, en);
-                  const label = dayLabel(n.at);
-                  const firstOfDay = i === 0 || dayLabel(shown[i - 1]!.at) !== label;
-                  const external = c.link && /^https?:\/\//.test(c.link.href);
-                  return (
-                    <li key={n.id} className="relative pl-12">
-                      {firstOfDay ? (
-                        // Day chip sits centred on the timeline line
-                        <span className="absolute left-0 top-0.5 -translate-x-1/2 whitespace-nowrap rounded-full border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-medium text-neutral-800">
-                          {label}
-                        </span>
-                      ) : (
-                        <span aria-hidden="true" className="absolute -left-[3px] top-2 h-1.5 w-1.5 rounded-full bg-neutral-800" />
-                      )}
-                      <h3 className="flex items-center gap-2 text-base font-semibold text-neutral-950">
-                        {isUnread(n) && <span className="h-2 w-2 shrink-0 rounded-full bg-red-600" aria-label={en ? 'Unread' : 'Belum dibaca'} />}
-                        {c.title}
-                      </h3>
-                      {n.type === 'model_new' && <ModelBanner modelId={n.modelId} name={n.name} />}
-                      <p className={`${n.type === 'model_new' ? 'mt-3' : 'mt-1.5'} whitespace-pre-line text-sm text-neutral-800`}>{c.body}</p>
-                      {c.link &&
-                        (external ? (
-                          <a href={c.link.href} target="_blank" rel="noopener noreferrer" className={`mt-3 inline-flex h-9 items-center rounded-lg border border-neutral-300 px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100 ${focusRing}`}>
-                            {c.link.label}
-                          </a>
-                        ) : (
-                          <Link href={c.link.href} onClick={() => dialogRef.current?.close()} className={`mt-3 inline-flex h-9 items-center rounded-lg border border-neutral-300 px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100 ${focusRing}`}>
-                            {c.link.label}
-                          </Link>
-                        ))}
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </div>
-        </div>
+        )}
       </dialog>
     </>
   );

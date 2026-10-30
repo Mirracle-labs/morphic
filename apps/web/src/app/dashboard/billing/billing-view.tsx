@@ -6,8 +6,8 @@ import { useTranslation } from '@/lib/i18n';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { Download, Loader2, FileText } from 'lucide-react';
-import { IDR_PER_USD, TOKEN_PACK_HOURS, multiplier, packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
-import { fmtCompact, fmtDuration, fmtPrice, fmtTokens, type BillingPackage, type PackageKind } from '@/lib/billing-format';
+import { TOKEN_PACK_HOURS, multiplier, packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
+import { fmtBalance, fmtCompact, fmtDuration, fmtMultiplier, fmtPrice, fmtTokens, type BillingPackage, type PackageKind } from '@/lib/billing-format';
 import { ModelProviderLogo } from '@/components/ProviderLogos';
 import { CheckoutModal } from './checkout-modal';
 
@@ -116,7 +116,7 @@ export function BillingView({
       type="button"
       onClick={() => exportCsv(kind)}
       disabled={exporting !== null}
-      className="inline-flex items-center gap-1.5 min-h-9 px-4 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-[11px] font-semibold text-neutral-800 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 shadow-2xs"
+      className="inline-flex self-start items-center gap-1.5 min-h-10 px-3.5 rounded-lg border border-neutral-200 bg-white hover:border-neutral-300 text-xs font-semibold text-neutral-800 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
     >
       {exporting === kind ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
       <span>{locale === 'en' ? 'Export CSV' : 'Ekspor CSV'}</span>
@@ -129,32 +129,18 @@ export function BillingView({
   const usd = en;
 
   const pkgs = (initialPackages as BillingPackage[]).map((p) => ({ ...p, kind: (p.kind ?? 'balance') as PackageKind }));
-  const tokenPack = pkgs.filter((p) => p.kind === 'tokens').sort((a, b) => (a.priceCents ?? 0) - (b.priceCents ?? 0))[0];
-  /** Price per 1M tokens in the display currency (IDR rupiah or USD cents). PayPal's $1 floor can reorder these. */
+  const byPrice = (a: BillingPackage, b: BillingPackage) => (a.priceCents ?? 0) - (b.priceCents ?? 0);
+  const balancePkgs = pkgs.filter((p) => p.kind === 'balance').sort(byPrice);
+  const tokenPacks = pkgs.filter((p) => p.kind === 'tokens').sort(byPrice);
+  const passes = pkgs.filter((p) => p.kind === 'unlimited').sort(byPrice);
+  const tokenPack = tokenPacks[0];
+  /** Price per 1M tokens in the display currency, so the pack discount is true for the price on screen. */
   const unitPrice = (p: BillingPackage) => {
     const m = p.creditAllowance / 1_000_000;
     const cents = p.priceCents ?? 0;
     return m ? (usd ? packagePriceUsdCents(cents, p.currency) : packagePriceIdr(cents, p.currency)) / m : Infinity;
   };
-  // "Best value" must be true in the currency on screen, so the featured plan is computed, not fixed.
-  const best = pkgs.filter((p) => p.kind !== 'unlimited').sort((a, b) => unitPrice(a) - unitPrice(b))[0];
-  const rest = pkgs
-    .filter((p) => p !== best)
-    .sort((a, b) => (a.kind === 'unlimited' ? 1 : 0) - (b.kind === 'unlimited' ? 1 : 0) || (a.priceCents ?? 0) - (b.priceCents ?? 0));
-  // Featured plan sits second so the eye lands on it.
-  const ordered = best ? [...rest.slice(0, 1), best, ...rest.slice(1)] : rest;
 
-  const kindLabel: Record<PackageKind, string> = {
-    tokens: en ? 'Token pack' : 'Paket token',
-    balance: en ? 'Balance' : 'Saldo',
-    unlimited: en ? 'Unlimited' : 'Unlimited',
-  };
-  // Only time-limited plans carry a term; balance never expires, so its price stands alone.
-  const term = (p: BillingPackage) =>
-    p.kind === 'balance' ? '' : `/ ${fmtDuration(p.durationHours ?? (p.kind === 'tokens' ? TOKEN_PACK_HOURS : 24), en)}`;
-
-  const packLeft = entitlements.filter((e) => !e.unlimited).reduce((a, e) => a + Math.max(0, e.remaining ?? 0), 0);
-  const spendable = packLeft + balance;
   const fmtWhen = (d: string | Date) =>
     new Date(d).toLocaleString(en ? 'en-US' : 'id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' });
   const buy = (p: BillingPackage) => {
@@ -173,133 +159,150 @@ export function BillingView({
   ];
   const segment = (active: boolean) =>
     cn(
-      'min-h-10 px-4 rounded-full text-sm whitespace-nowrap shrink-0 transition-colors cursor-pointer inline-flex items-center gap-2',
+      'min-h-10 px-3.5 rounded-md text-sm whitespace-nowrap shrink-0 transition-colors cursor-pointer inline-flex items-center gap-2',
       focusRing,
-      active ? 'bg-neutral-950 text-white font-semibold' : 'text-neutral-600 hover:text-neutral-950',
+      active ? 'bg-white text-neutral-950 font-semibold shadow-2xs' : 'text-neutral-600 hover:text-neutral-950',
     );
 
   return (
-    <div className="w-full space-y-10">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div role="group" aria-label={en ? 'Billing sections' : 'Bagian billing'} className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full border border-neutral-200 bg-white p-1">
-          {tabs.map(([id, label, count]) => (
-            <button key={id} type="button" aria-pressed={activeTab === id} onClick={() => handleTabChange(id)} className={segment(activeTab === id)}>
-              <span suppressHydrationWarning>{label}</span>
-              {count ? <span className={cn('font-mono text-xs tabular-nums', activeTab === id ? 'text-neutral-300' : 'text-neutral-500')}>{count}</span> : null}
-            </button>
-          ))}
+    <div className="w-full space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <h1 suppressHydrationWarning className="font-heading text-2xl font-bold tracking-tight text-neutral-950">
+          {en ? 'Billing' : 'Tagihan'}
+        </h1>
+        {/* w-full on phones bounds the segmented control, so long labels scroll inside it instead of widening the page. */}
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+          <div role="group" aria-label={en ? 'Billing sections' : 'Bagian billing'} className="inline-flex max-w-full min-w-0 gap-0.5 overflow-x-auto rounded-lg bg-neutral-100 p-1">
+            {tabs.map(([id, label, count]) => (
+              <button key={id} type="button" aria-pressed={activeTab === id} onClick={() => handleTabChange(id)} className={segment(activeTab === id)}>
+                <span suppressHydrationWarning>{label}</span>
+                {count ? <span className="font-mono text-xs tabular-nums text-neutral-500">{count}</span> : null}
+              </button>
+            ))}
+          </div>
+          <Link
+            href="/dashboard/redeem"
+            className={cn('inline-flex min-h-10 items-center rounded-md px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100', focusRing)}
+          >
+            {en ? 'Redeem a code' : 'Tukar kode'}
+          </Link>
         </div>
-        <Link
-          href="/dashboard/redeem"
-          className={cn('inline-flex min-h-10 items-center rounded-full px-4 text-sm font-semibold text-neutral-950 hover:bg-neutral-100', focusRing)}
-        >
-          {en ? 'Redeem a code' : 'Tukar kode'}
-        </Link>
       </div>
 
       {activeTab === 'packages' && (
-        <div className="space-y-14">
-          {/* Hero: one headline, the balance, and the currency switch. */}
-          <header className="text-center max-w-2xl mx-auto">
-            <h1 suppressHydrationWarning className="font-heading font-bold tracking-tight text-neutral-950 text-4xl sm:text-5xl leading-[1.05]">
-              {en ? 'Top up tokens. Use every model.' : 'Isi token, pakai semua model.'}
-            </h1>
-            <p suppressHydrationWarning className="mt-4 text-base text-neutral-600">
-              {en ? 'You have ' : 'Kamu punya '}
-              <span className="font-mono font-semibold text-neutral-950">{fmtTokens(spendable, en)}</span>
-              {packLeft > 0
-                ? en
-                  ? ` (${fmtCompact(packLeft, en)} in packs, ${fmtCompact(balance, en)} balance).`
-                  : ` (${fmtCompact(packLeft, en)} di paket, ${fmtCompact(balance, en)} saldo).`
-                : '.'}
-            </p>
-            <p suppressHydrationWarning className="mt-2 text-xs text-neutral-600">
-              {usd
-                ? en
-                  ? `Paid with PayPal or card at Rp${IDR_PER_USD.toLocaleString('id-ID')}/USD, minimum $1.00.`
-                  : `Bayar lewat PayPal atau kartu, kurs Rp${IDR_PER_USD.toLocaleString('id-ID')}/USD, minimal $1.00.`
-                : en
-                  ? 'Paid with QRIS, bank transfer or e-wallet via Duitku.'
-                  : 'Bayar lewat QRIS, transfer bank, atau e-wallet via Duitku.'}
-            </p>
-          </header>
-
-          {ordered.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-neutral-300 px-6 py-12 text-center text-sm text-neutral-600">
-              {en
-                ? 'Nothing is on sale right now. Plans show up here as soon as one is published.'
-                : 'Belum ada paket yang dijual. Paket akan muncul di sini begitu dirilis.'}
+        <div className="space-y-8">
+          <section aria-labelledby="balance-title" className="flex flex-col gap-6 rounded-3xl bg-neutral-950 p-6 text-white sm:p-8 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 id="balance-title" suppressHydrationWarning className="text-sm text-neutral-400">
+                {en ? 'Balance' : 'Saldo'}
+              </h2>
+              <p suppressHydrationWarning className="mt-2 font-heading text-4xl font-bold tracking-tight tabular-nums sm:text-5xl">
+                {fmtBalance(balance, en)}
+              </p>
             </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 items-stretch">
-              {ordered.map((p) => {
-                const featured = p.id === best?.id;
-                return (
-                  <article
+            {balancePkgs.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {balancePkgs.map((p) => (
+                  <button
                     key={p.id}
-                    className={cn(
-                      'relative flex min-h-80 flex-col rounded-3xl p-6 sm:p-7 transition-colors',
-                      featured
-                        ? // The one dark surface: cheapest per token in this currency. The soft top light gives it depth, nothing else.
-                          'bg-neutral-950 text-white bg-[radial-gradient(120%_60%_at_50%_0%,#3f3f46_0%,#09090b_60%)] xl:-my-3 xl:py-10'
-                        : 'bg-white border border-neutral-200 hover:border-neutral-300',
-                    )}
+                    id={`buy-pkg-${p.id}`}
+                    type="button"
+                    aria-label={en ? `Top up ${fmtPrice(p, usd)}` : `Isi saldo ${fmtPrice(p, usd)}`}
+                    onClick={() => buy(p)}
+                    className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-5 text-sm font-semibold tabular-nums text-white transition-colors hover:bg-white hover:text-neutral-950 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 suppressHydrationWarning className={cn('text-sm font-semibold', featured ? 'text-white' : 'text-neutral-950')}>
-                        {kindLabel[p.kind]}
-                      </h2>
-                      {featured && (
-                        <span suppressHydrationWarning className="whitespace-nowrap rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-neutral-950">
-                          {en ? 'Best value' : 'Paling hemat'}
-                        </span>
-                      )}
-                    </div>
+                    <span suppressHydrationWarning>+ {fmtPrice(p, usd)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
 
-                    <div suppressHydrationWarning className={cn('mt-6 font-mono text-5xl font-bold tracking-tight tabular-nums leading-none', featured ? 'text-white' : 'text-neutral-950')}>
-                      {fmtCompact(p.creditAllowance, en)}
-                    </div>
-                    <div suppressHydrationWarning className={cn('mt-2 text-sm', featured ? 'text-neutral-300' : 'text-neutral-600')}>
-                      {p.kind === 'unlimited'
-                        ? `${en ? 'tokens a day' : 'token per hari'} · ${p.modelDisplayName ?? (en ? 'one model' : 'satu model')}`
-                        : en
-                          ? 'tokens'
-                          : 'token'}
-                    </div>
+          {tokenPacks.length > 0 && (
+            <section aria-labelledby="packs-title" className="space-y-3">
+              <h2 id="packs-title" suppressHydrationWarning className="text-base font-semibold text-neutral-950">
+                Token pack
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {tokenPacks.map((p) => {
+                  const save = Math.round((1 - unitPrice(p) / unitPrice(tokenPacks[0]!)) * 100);
+                  return (
+                    <article key={p.id} className="flex flex-col rounded-2xl border border-neutral-200 bg-white p-5 transition-colors hover:border-neutral-400">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="flex items-baseline gap-1.5">
+                          <span suppressHydrationWarning className="font-heading text-3xl font-bold tracking-tight tabular-nums text-neutral-950">
+                            {fmtCompact(p.creditAllowance, en)}
+                          </span>
+                          <span suppressHydrationWarning className="text-sm text-neutral-600">{en ? 'tokens' : 'token'}</span>
+                        </p>
+                        {save >= 5 && (
+                          <span suppressHydrationWarning className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                            -{save}%
+                          </span>
+                        )}
+                      </div>
+                      <p suppressHydrationWarning className="mt-1 text-xs text-neutral-600">
+                        {fmtDuration(p.durationHours ?? TOKEN_PACK_HOURS, en)}
+                      </p>
+                      <div className="mt-6 flex items-center justify-between gap-3">
+                        <span suppressHydrationWarning className="font-heading text-lg font-bold tabular-nums text-neutral-950">{fmtPrice(p, usd)}</span>
+                        <button
+                          id={`buy-pkg-${p.id}`}
+                          type="button"
+                          aria-label={en ? `Buy ${p.name}` : `Beli ${p.name}`}
+                          onClick={() => buy(p)}
+                          className={cn('inline-flex min-h-11 items-center rounded-full bg-neutral-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
+                        >
+                          <span suppressHydrationWarning>{en ? 'Buy' : 'Beli'}</span>
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
-                    <div className="mt-auto pt-10 flex items-baseline gap-2">
-                      <span suppressHydrationWarning className={cn('font-heading text-3xl font-bold tracking-tight tabular-nums', featured ? 'text-white' : 'text-neutral-950')}>
-                        {fmtPrice(p, usd)}
-                      </span>
-                      {term(p) && <span suppressHydrationWarning className={cn('whitespace-nowrap text-sm', featured ? 'text-neutral-300' : 'text-neutral-600')}>{term(p)}</span>}
+          {passes.length > 0 && (
+            <section aria-labelledby="passes-title" className="space-y-3">
+              <h2 id="passes-title" suppressHydrationWarning className="text-base font-semibold text-neutral-950">
+                Unlimited
+              </h2>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {passes.map((p) => (
+                  <article key={p.id} className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-4 sm:p-5 transition-colors hover:border-neutral-400">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-neutral-100">
+                      <ModelProviderLogo provider={p.modelPublicId ?? ''} className="h-7 w-7" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate font-semibold text-neutral-950">{p.modelDisplayName ?? p.name}</h3>
+                      <p suppressHydrationWarning className="text-xs text-neutral-600 tabular-nums">
+                        {fmtDuration(p.durationHours ?? 24, en)} · {fmtCompact(p.creditAllowance, en)} {en ? 'tokens/day' : 'token/hari'}
+                      </p>
                     </div>
-
+                    <span suppressHydrationWarning className="hidden font-heading text-lg font-bold tabular-nums text-neutral-950 sm:block">{fmtPrice(p, usd)}</span>
                     <button
                       id={`buy-pkg-${p.id}`}
                       type="button"
                       aria-label={en ? `Buy ${p.name}` : `Beli ${p.name}`}
                       onClick={() => buy(p)}
-                      className={cn(
-                        'mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-full text-sm font-semibold transition-colors cursor-pointer',
-                        featured
-                          ? 'bg-white text-neutral-950 hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950'
-                          : cn('border border-neutral-300 text-neutral-950 hover:border-neutral-950 hover:bg-neutral-50', focusRing),
-                      )}
+                      className={cn('inline-flex min-h-11 shrink-0 items-center rounded-full bg-neutral-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
                     >
-                      <span suppressHydrationWarning>{en ? 'Buy' : 'Beli'}</span>
+                      <span suppressHydrationWarning className="sm:hidden">{fmtPrice(p, usd)}</span>
+                      <span suppressHydrationWarning className="hidden sm:inline">{en ? 'Buy' : 'Beli'}</span>
                     </button>
                   </article>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            </section>
           )}
 
           {entitlements.length > 0 && (
-            <section aria-labelledby="active-title" className="space-y-4">
-              <h2 id="active-title" suppressHydrationWarning className="text-lg font-semibold text-neutral-950">
+            <section aria-labelledby="active-title" className="space-y-3">
+              <h2 id="active-title" suppressHydrationWarning className="text-base font-semibold text-neutral-950">
                 {t.dashboard.activePassesTitle}
               </h2>
-              <ul className="grid gap-3 sm:grid-cols-2">
+              <ul className="divide-y divide-neutral-100 rounded-xl border border-neutral-200 bg-white">
                 {entitlements.map((e) => {
                   const allowance = Math.max(1, e.allowance ?? 1);
                   const remaining = Math.max(0, e.remaining ?? 0);
@@ -312,12 +315,12 @@ export function BillingView({
                       ? `${fmtCompact(remaining, en)} of ${fmtCompact(allowance, en)} left`
                       : `Sisa ${fmtCompact(remaining, en)} dari ${fmtCompact(allowance, en)}`;
                   return (
-                    <li key={e.id} className="rounded-2xl border border-neutral-200 bg-white p-5 space-y-3">
+                    <li key={e.id} className="space-y-2 px-5 py-4">
                       <div className="flex items-baseline justify-between gap-3">
-                        <span className="font-semibold text-neutral-950 truncate">{e.packageName ?? t.dashboard.billingActivePass}</span>
-                        <span suppressHydrationWarning className="font-mono text-xs text-neutral-800 tabular-nums shrink-0">{pct}%</span>
+                        <span className="truncate font-semibold text-neutral-950">{e.packageName ?? t.dashboard.billingActivePass}</span>
+                        <span suppressHydrationWarning className="shrink-0 font-mono text-xs text-neutral-800 tabular-nums">{pct}%</span>
                       </div>
-                      <div className="h-2 w-full rounded-full bg-neutral-100 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
                         <div className="h-full rounded-full bg-neutral-950" style={{ width: `${pct}%` }} />
                       </div>
                       <div suppressHydrationWarning className="text-xs text-neutral-600">
@@ -334,34 +337,34 @@ export function BillingView({
           )}
 
           {tokenPack && showcase.length > 0 && (
-            <section aria-labelledby="reach-title" className="rounded-3xl border border-neutral-200 bg-white p-6 sm:p-8">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h2 id="reach-title" suppressHydrationWarning className="text-lg font-semibold text-neutral-950">
-                  {en ? `How far ${fmtTokens(tokenPack.creditAllowance, en)} go` : `Seberapa jauh ${fmtTokens(tokenPack.creditAllowance, en)}`}
-                </h2>
+            <section aria-labelledby="reach-title" className="space-y-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <div>
+                  <h2 id="reach-title" suppressHydrationWarning className="text-base font-semibold text-neutral-950">
+                    {en ? `How far ${fmtTokens(tokenPack.creditAllowance, en)} go` : `Seberapa jauh ${fmtTokens(tokenPack.creditAllowance, en)}`}
+                  </h2>
+                  <p suppressHydrationWarning className="text-xs text-neutral-600">
+                    {en
+                      ? 'Output tokens if the whole pack went to one model, at today’s multipliers.'
+                      : 'Token output kalau seluruh paket dipakai di satu model, dengan multiplier saat ini.'}
+                  </p>
+                </div>
                 <Link href="/dashboard/models" className={cn('inline-flex min-h-11 items-center text-sm font-semibold text-neutral-950 underline underline-offset-4 decoration-neutral-300 hover:decoration-neutral-950 rounded', focusRing)}>
                   {en ? 'All multipliers' : 'Semua multiplier'}
                 </Link>
               </div>
-              <p suppressHydrationWarning className="mt-1 text-sm text-neutral-600">
-                {en
-                  ? 'Output tokens you could generate if the whole pack went to one model, at today’s multipliers.'
-                  : 'Token output yang bisa dihasilkan kalau seluruh paket dipakai di satu model, dengan multiplier saat ini.'}
-              </p>
-              <dl className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-px overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-200">
+              <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-neutral-200 bg-neutral-200 lg:grid-cols-4">
                 {showcase.map((m) => (
-                  <div key={m.id} className="bg-white p-4 sm:p-5 min-w-0">
-                    <dt className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-2.5 text-sm font-medium text-neutral-800 min-w-0" title={m.name}>
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50">
-                        <ModelProviderLogo provider={m.id} className="h-6 w-6" />
-                      </span>
-                      <span className="line-clamp-2 sm:line-clamp-1">{m.name}</span>
+                  <div key={m.id} className="min-w-0 bg-white p-4">
+                    <dt className="flex min-w-0 items-center gap-2 text-sm font-medium text-neutral-800" title={m.name}>
+                      <ModelProviderLogo provider={m.id} className="h-5 w-5 shrink-0" />
+                      <span className="truncate">{m.name}</span>
                     </dt>
-                    <dd suppressHydrationWarning className="mt-3 font-mono text-2xl sm:text-3xl font-bold text-neutral-950 tabular-nums">
+                    <dd suppressHydrationWarning className="mt-2 font-mono text-xl font-bold text-neutral-950 tabular-nums">
                       {fmtCompact(Math.floor(tokenPack.creditAllowance / multiplier(m.out)), en)}
                     </dd>
-                    <dd suppressHydrationWarning className="text-xs text-neutral-600 font-mono">
-                      output · {multiplier(m.out).toLocaleString(en ? 'en-US' : 'id-ID', { maximumFractionDigits: 1 })}x
+                    <dd suppressHydrationWarning className="font-mono text-xs text-neutral-600">
+                      output · {fmtMultiplier(m.out, en)}
                     </dd>
                   </div>
                 ))}
@@ -376,10 +379,10 @@ export function BillingView({
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
+              <h2 suppressHydrationWarning className="text-base font-semibold text-neutral-950">
                 {t.dashboard.qrisHistoryTitle}
               </h2>
-              <p className="text-xs text-neutral-500 mt-0.5">
+              <p className="text-xs text-neutral-600 mt-0.5">
                 {locale === 'en'
                   ? 'Track invoice payments, QRIS settlements, and download official receipts.'
                   : 'Pantau status pembayaran invoice, penyelesaian QRIS, dan unduh kuitansi resmi.'}
@@ -392,23 +395,23 @@ export function BillingView({
             <p role="alert" className="text-xs text-red-700">{exportError}</p>
           )}
 
-          <div className="rounded-2xl bg-white border border-neutral-200/90 shadow-2xs overflow-hidden">
+          <div className="rounded-xl bg-white border border-neutral-200 overflow-hidden">
             {paymentsList.length === 0 ? (
-              <div suppressHydrationWarning className="p-12 text-center text-xs text-neutral-500 font-mono">
+              <div suppressHydrationWarning className="px-6 py-10 text-center text-sm text-neutral-600">
                 {t.dashboard.noPaymentsHistory}
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="block w-full text-left text-sm sm:table">
                   <thead>
-                    <tr suppressHydrationWarning className="border-b border-neutral-200 bg-neutral-50/70 text-[11px] font-mono uppercase text-neutral-500">
+                    <tr suppressHydrationWarning className="hidden border-b border-neutral-200 bg-neutral-50 text-xs font-medium text-neutral-600 sm:table-row">
                       <th className="px-5 py-3">{t.dashboard.billingPaymentDate}</th>
                       <th className="px-5 py-3">{t.dashboard.billingPaymentPackage}</th>
                       <th className="px-5 py-3">{t.dashboard.billingPaymentAmount}</th>
                       <th className="px-5 py-3">{t.dashboard.billingPaymentStatus}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-neutral-100">
+                  <tbody className="block divide-y divide-neutral-100 sm:table-row-group">
                     {payments.map((p) => {
                       const age = Date.now() - new Date(p.createdAt).getTime();
                       const status =
@@ -418,7 +421,7 @@ export function BillingView({
                       const getStatusBadge = (st: string) => {
                         if (st === 'paid' || st === 'success' || st === 'settlement') {
                           return {
-                            className: 'bg-emerald-100 text-emerald-800',
+                            className: 'bg-emerald-50 text-emerald-800',
                             label: locale === 'en' ? 'Success' : 'Berhasil',
                           };
                         }
@@ -472,24 +475,25 @@ export function BillingView({
                       const badge = getStatusBadge(status);
 
                       return (
-                        <tr key={p.id}>
-                          <td className="px-5 py-3 text-neutral-500 whitespace-nowrap">
+                        // Phones: a two-line card (package + amount, then date + status); a table row from sm up.
+                        <tr key={p.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 px-4 py-3 sm:table-row sm:p-0">
+                          <td className="order-3 col-span-2 text-xs text-neutral-600 whitespace-nowrap sm:order-none sm:table-cell sm:px-5 sm:py-3 sm:text-sm">
                             {new Date(p.createdAt).toLocaleDateString(locale === 'en' ? 'en-US' : 'id-ID', {
                               dateStyle: 'medium',
                               timeZone: 'Asia/Jakarta',
                             })}
                           </td>
-                          <td className="px-5 py-3 font-bold text-neutral-900">{p.packageName ?? (locale === 'en' ? 'Top-up' : 'Isi Ulang')}</td>
-                          <td className="px-5 py-3 font-mono">
+                          <td className="order-1 min-w-0 font-medium text-neutral-950 sm:order-none sm:table-cell sm:px-5 sm:py-3">{p.packageName ?? (locale === 'en' ? 'Top-up' : 'Isi Ulang')}</td>
+                          <td className="order-2 text-right font-mono tabular-nums whitespace-nowrap sm:order-none sm:table-cell sm:px-5 sm:py-3 sm:text-left">
                             {p.currency === 'USD'
                               ? `$ ${(p.amountCents / 100).toFixed(2)} USD`
                               : `Rp ${(p.amountCents ?? 0).toLocaleString('id-ID')}`}
                           </td>
-                          <td className="px-5 py-3">
-                            <div className="flex items-center gap-2">
+                          <td className="order-4 col-span-2 sm:order-none sm:table-cell sm:px-5 sm:py-3">
+                            <div className="flex flex-wrap items-center gap-2">
                               <span
                                 suppressHydrationWarning
-                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${badge.className}`}
+                                className={`px-2 py-0.5 rounded-md text-xs font-semibold whitespace-nowrap ${badge.className}`}
                               >
                                 {badge.label}
                               </span>
@@ -499,7 +503,7 @@ export function BillingView({
                                   href={`/receipt/${p.id}`}
                                   target="_blank"
                                   rel="noopener"
-                                  className="inline-flex items-center gap-1 min-h-7 px-3 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-800 text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 shadow-2xs"
+                                  className="inline-flex items-center gap-1 min-h-9 px-3 rounded-md border border-neutral-200 bg-white hover:border-neutral-300 text-neutral-800 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
                                 >
                                   <FileText className="h-3 w-3" />
                                   <span suppressHydrationWarning>{locale === 'en' ? 'Receipt' : 'Kuitansi'}</span>
@@ -525,7 +529,8 @@ export function BillingView({
                                       status: status,
                                     });
                                   }}
-                                  className="px-3 py-1 rounded-full bg-neutral-950 hover:bg-neutral-800 text-white text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95"
+                                  type="button"
+                                  className="inline-flex items-center min-h-9 px-3 rounded-md bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2"
                                 >
                                   <span suppressHydrationWarning>{locale === 'en' ? 'Pay Now' : 'Lanjutkan Bayar'}</span>
                                 </button>
@@ -548,10 +553,10 @@ export function BillingView({
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 suppressHydrationWarning className="font-heading font-bold text-lg text-neutral-950">
+              <h2 suppressHydrationWarning className="text-base font-semibold text-neutral-950">
                 {t.dashboard.ledgerHistoryTitle}
               </h2>
-              <p className="text-xs text-neutral-500 mt-0.5">
+              <p className="text-xs text-neutral-600 mt-0.5">
                 {locale === 'en'
                   ? 'Audit log of all token usages, top-ups, voucher redeems, and credit balances.'
                   : 'Catatan rinci seluruh pemakaian token, top-up, klaim voucher, dan saldo kredit.'}
@@ -560,33 +565,32 @@ export function BillingView({
             {ledger.length > 0 && exportButton('ledger')}
           </div>
 
-          <div className="rounded-2xl bg-white border border-neutral-200/90 shadow-2xs overflow-hidden">
+          <div className="rounded-xl bg-white border border-neutral-200 overflow-hidden">
             {ledger.length === 0 ? (
-              <div suppressHydrationWarning className="p-12 text-center text-xs text-neutral-500 font-mono">
+              <div suppressHydrationWarning className="px-6 py-10 text-center text-sm text-neutral-600">
                 {t.dashboard.noLedgerHistory}
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="block w-full text-left text-sm sm:table">
                   <thead>
-                    <tr suppressHydrationWarning className="border-b border-neutral-200 bg-neutral-50/70 text-[11px] font-mono uppercase text-neutral-500">
+                    <tr suppressHydrationWarning className="hidden border-b border-neutral-200 bg-neutral-50 text-xs font-medium text-neutral-600 sm:table-row">
                       <th className="px-5 py-3">{t.dashboard.thLedgerType}</th>
                       <th className="px-5 py-3">{t.dashboard.thLedgerAmount}</th>
                       <th className="px-5 py-3">{t.dashboard.thLedgerRef}</th>
                       <th className="px-5 py-3">{t.dashboard.thLedgerDate}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-neutral-100">
+                  <tbody className="block divide-y divide-neutral-100 sm:table-row-group">
                     {ledger.map((entry) => (
-                      <tr key={entry.id}>
-                        <td className="px-5 py-3 font-bold text-neutral-800 whitespace-nowrap">
+                      <tr key={entry.id} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-4 py-3 sm:table-row sm:p-0">
+                        <td className="order-1 font-medium text-neutral-950 whitespace-nowrap sm:order-none sm:table-cell sm:px-5 sm:py-3">
                           {(LEDGER_TYPE_LABELS[entry.entryType] ?? { en: entry.entryType, id: entry.entryType })[locale === 'en' ? 'en' : 'id']}
                         </td>
-                        <td className={`px-5 py-3 font-mono font-bold ${entry.amount >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                          }`}>
+                        <td className={`order-2 text-right font-mono font-semibold tabular-nums whitespace-nowrap sm:order-none sm:table-cell sm:px-5 sm:py-3 sm:text-left ${entry.amount >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                           {entry.amount >= 0 ? '+' : ''}{entry.amount.toLocaleString(locale === 'en' ? 'en-US' : 'id-ID')}
                         </td>
-                        <td className="px-5 py-3 text-neutral-600 max-w-[260px] truncate" title={entry.reference ?? undefined}>
+                        <td className="order-3 min-w-0 truncate text-xs text-neutral-600 sm:order-none sm:table-cell sm:max-w-[260px] sm:px-5 sm:py-3 sm:text-sm" title={entry.reference ?? undefined}>
                           {entry.redeemCode
                             ? `${locale === 'en' ? 'Code' : 'Kode'} ${entry.redeemCode}`
                             : entry.packageName
@@ -599,7 +603,7 @@ export function BillingView({
                                     ? `${locale === 'en' ? 'Request' : 'Request'} ${entry.reference.slice(0, 12)}`
                                     : '-'}
                         </td>
-                        <td className="px-5 py-3 text-neutral-500 font-mono whitespace-nowrap">
+                        <td className="order-4 text-right text-xs text-neutral-600 font-mono tabular-nums whitespace-nowrap sm:order-none sm:table-cell sm:px-5 sm:py-3 sm:text-left sm:text-sm">
                           {new Date(entry.createdAt).toLocaleString(
                             locale === 'en' ? 'en-US' : 'id-ID',
                             { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Jakarta' }

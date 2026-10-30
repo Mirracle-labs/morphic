@@ -6,6 +6,7 @@ import { db, schema as s } from '@morphic/db';
 import { markPaymentIfOpen, getBalance } from '@morphic/db/billing';
 import { verifyCallbackSignature, createTransaction, checkTransactionStatus, assertDuitkuConfig } from '../lib/duitku';
 import { eq } from 'drizzle-orm';
+import { IDR_PER_USD } from '@morphic/shared/credits';
 
 function md5(data: string): string {
   return createHash('md5').update(data).digest('hex');
@@ -37,25 +38,42 @@ test('Security Test 1: Duitku /create bills a USD package in IDR at the fixed ra
     })
     .returning();
 
-  const res = await app.request('/v1/payments/create', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ packageId: pkgUsd.id }),
+  // Duitku itself is mocked: this test is about what we bill, and .env.test only carries
+  // placeholder credentials, which the real sandbox rejects with "Wrong signature".
+  const sent: { paymentAmount?: number }[] = [];
+  const f = mock.method(globalThis, 'fetch', async (_url: any, init: any) => {
+    sent.push(JSON.parse(String(init?.body ?? '{}')));
+    return new Response(
+      JSON.stringify({ paymentUrl: 'https://sandbox.duitku.com/pay/mock', reference: 'MOCKREF', statusCode: '00', statusMessage: 'SUCCESS' }),
+      { status: 200 },
+    );
   });
+  let res: Response;
+  try {
+    res = await app.request('/v1/payments/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ packageId: pkgUsd.id }),
+    });
+  } finally {
+    f.mock.restore();
+  }
 
-  // Since 7ef47dc any package can be paid through Duitku; USD prices are converted at
-  // 1 USD = 16,000 IDR. The invoice must be in IDR for exactly that amount.
+  // Since 7ef47dc any package can be paid through Duitku; USD prices are converted at the
+  // fixed IDR_PER_USD rate. The invoice must be in IDR for exactly that amount.
+  const expectedIdr = Math.round(5 * IDR_PER_USD);
   assert.equal(res.status, 200);
+  assert.equal(sent[0]?.paymentAmount, expectedIdr);
   const [payment] = await db
     .select({ currency: s.payments.currency, amountCents: s.payments.amountCents })
     .from(s.payments)
     .where(eq(s.payments.userId, user.id))
     .limit(1);
   assert.equal(payment?.currency, 'IDR');
-  assert.equal(payment?.amountCents, 80_000);
+  assert.equal(payment?.amountCents, expectedIdr);
 });
 
 test('Security Test 2: markPaymentIfOpen does NOT overwrite paid status', async () => {

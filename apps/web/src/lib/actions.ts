@@ -1,3 +1,6 @@
+// /home/riyan/Downloads/Projects/morphic/apps/web/src/lib/actions.ts
+// typescript / actions.ts / next-server / @morphic/web
+
 'use server';
 
 import { headers } from 'next/headers';
@@ -98,27 +101,9 @@ export { requireUser, requireAdmin, requireInteractiveUser, isCurrentUserAdmin }
 
 
 export async function listApiKeys() {
-  await requireUser();
+  const user = await requireUser();
 
   try {
-    const apiRes = await fetchBackendApi<{ data: any[] }>('/v1/keys');
-    if (apiRes.data?.data) {
-      return apiRes.data.data.map((k: any) => ({
-        id: k.id,
-        name: k.name,
-        keyPrefix: k.prefix,
-        status: k.status,
-        expiresAt: k.expires_at ? new Date(k.expires_at) : null,
-        lastUsedAt: k.last_used_at ? new Date(k.last_used_at) : null,
-        createdAt: k.created_at ? new Date(k.created_at) : new Date(),
-      }));
-    }
-  } catch (err) {
-    console.warn('[listApiKeys] Backend API fetch failed, falling back to direct DB:', err);
-  }
-
-  try {
-    const user = await requireUser();
     const rows = await db
       .select({
         id: s.apiKeys.id,
@@ -279,7 +264,7 @@ export async function deleteApiKey(id: string): Promise<{ ok: boolean; error?: s
     return { ok: true };
   } catch (err: any) {
     console.error('[deleteApiKey] Failed to delete API key:', err);
-    return { ok: false, error: err?.message || 'Failed to delete API key' };
+    return { ok: false, error: 'Failed to delete API key' };
   }
 }
 
@@ -402,7 +387,7 @@ export async function simulatePaymentWebhook(formData: FormData) {
 
 
 export async function createPaymentAction(packageId: string, paymentMethod?: string) {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await getSessionWithRetry();
   if (!session) redirect('/login');
 
   const res = await fetchBackendApi<{
@@ -430,7 +415,7 @@ export async function createPaymentAction(packageId: string, paymentMethod?: str
 }
 
 export async function checkPaymentStatusAction(paymentId: string) {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await getSessionWithRetry();
   if (!session) redirect('/login');
 
   const res = await fetchBackendApi<{ status: string; credits?: number }>(
@@ -456,7 +441,7 @@ export async function getUsageLogsAction(params: {
   from?: string;
   to?: string;
 } = {}) {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await getSessionWithRetry();
   if (!session) redirect('/login');
 
   const page = Math.max(1, params.page ?? 1);
@@ -580,7 +565,7 @@ export async function provisionPostPaymentKey(params?: { packageName?: string })
     console.error('[provisionPostPaymentKey] Failed to insert key:', err);
     return {
       ok: false,
-      error: err?.message || 'Failed to create API key',
+      error: 'Failed to create API key',
     };
   }
 }

@@ -53,7 +53,7 @@ export function actualUsageCredits(
  * (what checkout shows and admin reports convert with). Owner reviews it monthly (OWN-04).
  * ponytail: fixed rate; switch to a cached live rate with sanity bounds if FX moves too fast.
  */
-export const IDR_PER_USD = 16_000;
+export const IDR_PER_USD = 18_100;
 
 // ── Tokenomics ────────────────────────────────────────
 // 1 credit = 1 base token (1x). A model's price is credits per 1M tokens, so its multiplier is

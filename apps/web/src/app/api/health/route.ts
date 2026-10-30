@@ -19,7 +19,9 @@ export async function GET() {
       return NextResponse.json({ ok: false, status: 'degraded', latencyMs: Date.now() - started }, { status: 503 });
     }
     const data = await res.json();
-    return NextResponse.json({ ...data, latencyMs: Date.now() - started });
+    // Whitelist: whatever else the gateway adds to /health stays internal.
+    const ok = Boolean(data?.ok);
+    return NextResponse.json({ ok, status: ok ? 'operational' : 'degraded', latencyMs: Date.now() - started });
   } catch {
     return NextResponse.json({ ok: false, status: 'degraded', latencyMs: Date.now() - started }, { status: 503 });
   }

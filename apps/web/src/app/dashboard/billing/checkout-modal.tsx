@@ -16,9 +16,7 @@ import {
   Check,
   KeyRound,
   Terminal,
-  Code2,
   BookOpen,
-  CreditCard,
 } from 'lucide-react';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits, API_BASE_URL, cn } from '@/lib/utils';
@@ -191,11 +189,30 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
     };
   }, []);
 
-  // Escape closes, same as the close button.
+  // Dialog focus: move focus in on open, keep Tab inside, Escape closes, focus returns on close.
+  const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return onClose();
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const items = dialogRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-guard])');
+      if (!items.length) return;
+      const first = items[0]!, last = items[items.length - 1]!;
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus?.();
+    };
   }, [onClose]);
 
   // Countdown to invoice expiry (the server cancels it right after).
@@ -218,8 +235,7 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
           setProvisionError(res?.error || 'Gagal generate token');
         }
       })
-      .catch((err) => {
-        console.error('[checkout-modal] Failed to auto-provision key:', err);
+      .catch(() => {
         setProvisionError('Gagal generate token');
       })
       .finally(() => {
@@ -463,345 +479,304 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
     ? `$ ${(pkg.priceCents / 100).toFixed(2)} USD`
     : `Rp ${(pkg.priceCents).toLocaleString('id-ID')}`;
 
+  // Tab pressed inside the PayPal iframe never reaches the window listener, so focus guards at both
+  // ends of the dialog catch it as it leaves and send it back to the other end.
+  const focusEdge = (edge: 'first' | 'last') => {
+    const items = dialogRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]):not([data-focus-guard])');
+    if (!items?.length) return dialogRef.current?.focus();
+    items[edge === 'first' ? 0 : items.length - 1]!.focus();
+  };
+  const en = locale === 'en';
+  const priceLabel = isUSD ? `$${usdPrice}` : `Rp${idrPrice.toLocaleString('id-ID')}`;
+  const resolving = status === 'waiting' || status === 'pending_paypal' || status === 'creating';
+  const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 focus-visible:ring-offset-2';
+  const sampleKey = provisionedToken || 'mp-live-...';
+  const snippets: Record<IdeTab, { hint: string; code: string }> = {
+    cursor: {
+      hint: en ? 'Cursor: Settings › Models › OpenAI API Key, then override the base URL.' : 'Cursor: Settings › Models › OpenAI API Key, lalu ganti base URL.',
+      code: `Base URL  ${API_BASE_URL}\nAPI key   ${sampleKey}\nModel     deepseek-v4`,
+    },
+    cline: {
+      hint: en ? 'Cline / Roo Code: pick "OpenAI Compatible" as the API provider.' : 'Cline / Roo Code: pilih "OpenAI Compatible" sebagai API provider.',
+      code: `Base URL  ${API_BASE_URL}\nAPI key   ${sampleKey}\nModel ID  deepseek-v4`,
+    },
+    claudecode: {
+      hint: en ? 'Claude Code: export these before running claude.' : 'Claude Code: export ini sebelum menjalankan claude.',
+      code: `export ANTHROPIC_BASE_URL="${API_BASE_URL}"\nexport ANTHROPIC_API_KEY="${sampleKey}"`,
+    },
+    curl: {
+      hint: en ? 'Send one request to check the key works.' : 'Kirim satu request untuk memastikan key jalan.',
+      code: `curl ${API_BASE_URL}/chat/completions \\\n  -H "Authorization: Bearer ${sampleKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4", "messages": [{"role": "user", "content": "Hello"}]}'`,
+    },
+  };
+
+  /** Neutral notice block for the in-between states; tone only changes the hairline and icon colour. */
+  const notice = (tone: 'wait' | 'warn' | 'error', icon: React.ReactNode, title: string, body?: React.ReactNode) => (
+    <div
+      role={tone === 'error' ? 'alert' : 'status'}
+      className={cn(
+        'flex gap-3 rounded-xl border p-4',
+        tone === 'warn' ? 'border-amber-200 bg-amber-50' : tone === 'error' ? 'border-red-200 bg-red-50' : 'border-neutral-200 bg-neutral-50',
+      )}
+    >
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <div className="min-w-0 space-y-1">
+        <p className={cn('text-sm font-semibold', tone === 'warn' ? 'text-amber-950' : tone === 'error' ? 'text-red-900' : 'text-neutral-950')}>{title}</p>
+        {body && <div className={cn('text-sm', tone === 'warn' ? 'text-amber-900' : tone === 'error' ? 'text-red-800' : 'text-neutral-600')}>{body}</div>}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+    // Bottom sheet on phones (thumb reach), centred dialog from sm up.
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-neutral-950/50 sm:items-center sm:p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
-        className={`bg-white rounded-2xl border border-neutral-200 w-full max-h-[92vh] shadow-2xl overflow-y-auto flex flex-col transition-all duration-200 ${
-          status === 'paid' ? 'max-w-xl' : 'max-w-md'
-        }`}
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label={`Checkout: ${pkgName}`}
+        aria-labelledby="checkout-title"
+        className={cn(
+          // The only elevated surface on the page, so it alone carries a shadow.
+          'flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-neutral-200/70 bg-white shadow-xl outline-none sm:rounded-3xl',
+          'animate-in fade-in slide-in-from-bottom-2 duration-150 motion-reduce:animate-none',
+          status === 'paid' ? 'sm:max-w-lg' : 'sm:max-w-md',
+        )}
       >
+        <span tabIndex={0} data-focus-guard aria-hidden="true" onFocus={() => focusEdge('last')} />
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-100">
-          <span className="text-xs font-mono font-bold text-neutral-500 uppercase tracking-widest">
-            {status === 'paid'
-              ? (locale === 'en' ? 'Payment Complete & Setup' : 'Pembayaran Selesai & Setup Token')
-              : (locale === 'en' ? 'Checkout & Top-up' : 'Checkout & Pembayaran')}
-          </span>
+        <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-3">
+          <h2 id="checkout-title" className="text-sm font-semibold text-neutral-950">
+            {status === 'paid' ? (en ? 'Payment received' : 'Pembayaran diterima') : en ? 'Checkout' : 'Checkout'}
+          </h2>
           <button
             id="checkout-modal-close"
+            type="button"
             onClick={onClose}
-            aria-label={locale === 'en' ? 'Close modal' : 'Tutup modal'}
-            className="text-neutral-500 hover:text-neutral-900 transition-colors cursor-pointer p-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+            aria-label={en ? 'Close' : 'Tutup'}
+            className={cn('-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 cursor-pointer', focusRing)}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5 space-y-5">
-          {/* Package info (hidden when paid to keep focus on key and agent setup) */}
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          {/* Order summary: what is being bought and what it costs. */}
           {status !== 'paid' && (
-            <div className="text-center">
-              <div className="text-lg font-extrabold text-neutral-950 font-heading">{pkgName}</div>
-              <div className="text-3xl font-black text-neutral-950 mt-1 font-mono">
-                {paymentProvider === 'paypal' ? `$ ${usdPrice} USD` : `Rp ${idrPrice.toLocaleString('id-ID')}`}
-              </div>
-              {pkg.kind && (
-                <p className="text-sm text-neutral-600 mt-1.5 max-w-sm mx-auto">{packageSummary(pkg as BillingPackage, locale === 'en')}</p>
-              )}
+            <div className="space-y-1">
+              <p className="text-sm text-neutral-600">{pkgName}</p>
+              <p className="font-heading text-3xl font-bold tracking-tight text-neutral-950 tabular-nums">{priceLabel}</p>
+              {pkg.kind && <p className="text-sm text-neutral-600">{packageSummary(pkg as BillingPackage, en)}</p>}
             </div>
           )}
 
-          {/* Payment Method Selector — Duitku vs PayPal */}
-          {status !== 'paid' && status !== 'waiting' && status !== 'pending_paypal' && (
-            <div className="space-y-2">
-              <div className="text-[11px] font-mono font-bold text-neutral-500 uppercase tracking-wider">
-                {locale === 'en' ? 'Payment Method' : 'Metode Pembayaran'}
-              </div>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentProvider('duitku');
-                    setErrorMsg(null);
-                  }}
-                  className={cn(
-                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5",
-                    paymentProvider === 'duitku'
-                      ? "border-neutral-950 bg-neutral-950 text-white shadow-2xs"
-                      : "border-neutral-200 bg-white hover:border-neutral-300 text-neutral-800"
-                  )}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <QrCode className="h-4 w-4 shrink-0" />
-                    <span className={cn(
-                      "text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase",
-                      paymentProvider === 'duitku' ? "bg-white/20 text-white" : "bg-neutral-100 text-neutral-600"
-                    )}>
-                      QRIS / VA
-                    </span>
-                  </div>
-                  <div>
-                    <div className="font-bold text-xs">Duitku</div>
-                    <div className={cn("text-[10px] mt-0.5 font-mono", paymentProvider === 'duitku' ? "text-emerald-400 font-bold" : "text-neutral-600 font-semibold")}>
-                      Rp {idrPrice.toLocaleString('id-ID')}
-                    </div>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentProvider('paypal');
-                    setErrorMsg(null);
-                  }}
-                  className={cn(
-                    "p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5",
-                    paymentProvider === 'paypal'
-                      ? "border-neutral-950 bg-neutral-950 text-white shadow-2xs"
-                      : "border-neutral-200 bg-white hover:border-neutral-300 text-neutral-800"
-                  )}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <CreditCard className="h-4 w-4 shrink-0" />
-                    <span className={cn(
-                      "text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase",
-                      paymentProvider === 'paypal' ? "bg-white/20 text-white" : "bg-neutral-100 text-neutral-600"
-                    )}>
-                      Cards
-                    </span>
-                  </div>
-                  <div>
-                    <div className="font-bold text-xs">PayPal</div>
-                    <div className={cn("text-[10px] mt-0.5 font-mono", paymentProvider === 'paypal' ? "text-emerald-400 font-bold" : "text-neutral-600 font-semibold")}>
-                      $ {usdPrice} USD
-                    </div>
-                  </div>
-                </button>
-              </div>
+          {/* Currency / gateway switch. Locked once a payment is in flight. */}
+          {status !== 'paid' && !resolving && status !== 'needs_review' && status !== 'failed' && (
+            <div role="radiogroup" aria-label={en ? 'Payment method' : 'Metode pembayaran'} className="grid grid-cols-2 gap-1 rounded-lg bg-neutral-100 p-1">
+              {(
+                [
+                  { id: 'duitku', label: 'QRIS', sub: `Rp${idrPrice.toLocaleString('id-ID')}` },
+                  { id: 'paypal', label: en ? 'PayPal / card' : 'PayPal / kartu', sub: `$${usdPrice}` },
+                ] as const
+              ).map((opt) => {
+                const active = paymentProvider === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => {
+                      setPaymentProvider(opt.id);
+                      setErrorMsg(null);
+                    }}
+                    className={cn(
+                      'flex min-h-12 flex-col items-start justify-center rounded-md px-3 text-left transition-colors cursor-pointer',
+                      focusRing,
+                      active ? 'bg-white shadow-2xs' : 'hover:bg-white/60',
+                    )}
+                  >
+                    <span className={cn('text-sm font-semibold', active ? 'text-neutral-950' : 'text-neutral-700')}>{opt.label}</span>
+                    <span className="font-mono text-xs text-neutral-600 tabular-nums">{opt.sub}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
-          {/* PayPal Flow */}
-          {paymentProvider === 'paypal' && status !== 'paid' && status !== 'waiting' && status !== 'pending_paypal' && status !== 'needs_review' && status !== 'failed' && (
-            <div className="space-y-3 pt-1">
-              <PayPalButton
-                packageId={pkg.id}
-                giftCard={giftCard}
-                paymentId={paymentId ?? existingPayment?.id}
-                onPaymentCreated={(pid) => setPaymentId(pid)}
-                onSuccess={handlePayPalSuccess}
-                onError={handlePayPalError}
-                onPendingPayPal={() => handlePayPalPending()}
-                onProcessing={(pid) => handlePayPalProcessing(pid)}
-              />
-            </div>
+          {/* PayPal renders its own buttons. */}
+          {paymentProvider === 'paypal' && status !== 'paid' && !resolving && status !== 'needs_review' && status !== 'failed' && (
+            <PayPalButton
+              packageId={pkg.id}
+              giftCard={giftCard}
+              paymentId={paymentId ?? existingPayment?.id}
+              onPaymentCreated={(pid) => setPaymentId(pid)}
+              onSuccess={handlePayPalSuccess}
+              onError={handlePayPalError}
+              onPendingPayPal={() => handlePayPalPending()}
+              onProcessing={(pid) => handlePayPalProcessing(pid)}
+            />
           )}
 
-          {/* Duitku Flow */}
           {paymentProvider === 'duitku' && status === 'idle' && (
-            <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200/90 text-center space-y-1.5">
-              <p className="text-xs text-neutral-600 font-medium">
-                {locale === 'en'
-                  ? 'Supported: QRIS (GoPay, OVO, ShopeePay), BCA, Mandiri, BNI, BRI Virtual Account'
-                  : 'Mendukung: QRIS (GoPay, OVO, ShopeePay), BCA, Mandiri, BNI, BRI Virtual Account'}
-              </p>
-              <p className="text-[11px] text-neutral-500 leading-relaxed">
-                {existingPayment
-                  ? (locale === 'en' ? 'Click below to resume your payment.' : 'Klik tombol di bawah untuk melanjutkan pembayaran.')
-                  : (locale === 'en' ? 'Click below to open the secure Duitku payment page.' : 'Klik tombol di bawah untuk membuka halaman pembayaran resmi Duitku.')}
-              </p>
-            </div>
+            <p className="text-sm text-neutral-600">
+              {existingPayment
+                ? en
+                  ? 'Your invoice is still open. Reopen it to finish paying.'
+                  : 'Invoice kamu masih terbuka. Buka lagi untuk menyelesaikan pembayaran.'
+                : en
+                  ? 'Duitku opens in a new tab with a QRIS code. Scan it with any banking or e-wallet app (GoPay, OVO, DANA, ShopeePay, m-banking). The invoice is valid for 5 minutes.'
+                  : 'Duitku terbuka di tab baru dengan kode QRIS. Scan dari aplikasi bank atau e-wallet apa pun (GoPay, OVO, DANA, ShopeePay, m-banking). Invoice berlaku 5 menit.'}
+            </p>
           )}
 
-          {!isUSD && status === 'creating' && (
-            <div className="flex items-center justify-center gap-2 py-2 text-sm text-neutral-600">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>{locale === 'en' ? 'Creating transaction…' : 'Membuat transaksi…'}</span>
-            </div>
-          )}
+          {!isUSD && status === 'creating' &&
+            notice('wait', <Loader2 className="h-4 w-4 animate-spin text-neutral-700" />, en ? 'Creating your invoice…' : 'Membuat invoice…')}
 
-          {isUSD && status === 'waiting' && (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-2.5">
-              <div className="flex items-center justify-center gap-2 text-neutral-900 text-sm font-semibold">
-                <Loader2 className="h-4 w-4 animate-spin text-amber-700" />
-                <span>{locale === 'en' ? 'Verifying PayPal payment…' : 'Memverifikasi pembayaran PayPal…'}</span>
-              </div>
-              <p className="text-xs text-amber-800 leading-relaxed">
-                {locale === 'en'
-                  ? 'PayPal is processing your transaction. Please wait, this will update automatically.'
-                  : 'PayPal sedang memproses transaksi Anda. Mohon tunggu, halaman ini akan otomatis terupdate.'}
-              </p>
-            </div>
-          )}
+          {isUSD && status === 'waiting' &&
+            notice(
+              'wait',
+              <Loader2 className="h-4 w-4 animate-spin text-neutral-700" />,
+              en ? 'Confirming with PayPal…' : 'Mengonfirmasi ke PayPal…',
+              en ? 'This updates on its own, usually within a few seconds.' : 'Ini akan berubah sendiri, biasanya dalam beberapa detik.',
+            )}
 
           {!isUSD && status === 'waiting' && (
-            <div className="space-y-3">
-              <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200 text-center space-y-2.5">
-                <div className="flex items-center justify-center gap-2 text-neutral-900 text-sm font-semibold">
-                  <Loader2 className="h-4 w-4 animate-spin text-neutral-800" />
-                  <span>{locale === 'en' ? 'Waiting for payment…' : 'Menunggu pembayaran…'}</span>
-                </div>
-                <div className="text-xs text-neutral-700 font-medium">
-                  {locale === 'en' ? 'Method: ' : 'Metode: '}
-                  <span className="font-bold text-neutral-950">Duitku (QRIS / VA / E-Wallet)</span>
-                </div>
-                <p className="text-xs text-neutral-600 leading-relaxed">
-                  {locale === 'en'
-                    ? 'Complete payment in the Duitku tab. This page will update automatically.'
-                    : 'Selesaikan pembayaran di tab Duitku. Halaman ini akan otomatis terupdate.'}
-                </p>
-                {secondsLeft !== null && secondsLeft > 0 && (
-                  <div className="flex items-center justify-center gap-1 text-xs text-neutral-500 font-mono font-bold">
-                    <Clock className="h-3.5 w-3.5 text-neutral-500" />
-                    <span>{formatCountdown(secondsLeft)}</span>
-                  </div>
-                )}
-              </div>
+            <div className="space-y-2">
+              {notice(
+                'wait',
+                <Loader2 className="h-4 w-4 animate-spin text-neutral-700" />,
+                en ? 'Waiting for your QRIS payment' : 'Menunggu pembayaran QRIS',
+                <>
+                  {en ? 'Finish paying in the Duitku tab. This window updates by itself.' : 'Selesaikan di tab Duitku. Jendela ini akan berubah sendiri.'}
+                  {secondsLeft !== null && secondsLeft > 0 && (
+                    <span className="mt-2 flex items-center gap-1.5 font-mono text-xs text-neutral-700 tabular-nums">
+                      <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                      {en ? 'expires in ' : 'berakhir dalam '}
+                      {formatCountdown(secondsLeft)}
+                    </span>
+                  )}
+                </>,
+              )}
               {paymentUrl && (
                 <a
                   href={paymentUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1.5 text-xs text-neutral-600 hover:text-neutral-900 transition-colors py-1 font-medium"
+                  className={cn('inline-flex min-h-10 items-center gap-1.5 rounded-md text-sm font-medium text-neutral-700 underline underline-offset-4 decoration-neutral-300 hover:text-neutral-950 hover:decoration-neutral-950', focusRing)}
                 >
-                  <ExternalLink className="h-3 w-3" />
-                  {locale === 'en' ? 'Reopen payment page' : 'Buka ulang halaman pembayaran'}
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  {en ? 'Reopen the QRIS page' : 'Buka lagi halaman QRIS'}
                 </a>
               )}
             </div>
           )}
 
-          {status === 'pending_paypal' && (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1">
-              <Clock className="h-8 w-8 text-amber-500 mx-auto" />
-              <div className="font-bold text-amber-900 text-sm">
-                {locale === 'en' ? 'Payment under review' : 'Pembayaran sedang ditinjau'}
-              </div>
-              <div className="text-xs text-amber-700">
-                {locale === 'en'
-                  ? 'PayPal is reviewing this transaction. Credits will be added automatically once approved.'
-                  : 'PayPal sedang meninjau transaksi ini. Kredit akan otomatis ditambahkan setelah disetujui.'}
-              </div>
-            </div>
-          )}
+          {status === 'pending_paypal' &&
+            notice(
+              'warn',
+              <Clock className="h-4 w-4 text-amber-700" />,
+              en ? 'PayPal is reviewing this payment' : 'PayPal sedang meninjau pembayaran ini',
+              en ? 'Tokens are added automatically once PayPal approves it. You can close this window.' : 'Token otomatis masuk begitu PayPal menyetujui. Jendela ini boleh ditutup.',
+            )}
 
-          {status === 'needs_review' && (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-2.5">
-              <Clock className="h-8 w-8 text-amber-600 mx-auto" />
-              <div className="font-bold text-amber-950 text-sm">
-                {locale === 'en' ? 'Payment under review' : 'Pembayaran sedang ditinjau'}
-              </div>
-              <p className="text-xs text-amber-900 leading-relaxed">
-                {locale === 'en'
-                  ? 'Your payment is under review. Please contact support and quote your payment ID:'
-                  : 'Pembayaran Anda sedang dalam peninjauan. Silakan hubungi tim bantuan dan sebutkan ID pembayaran berikut:'}
-              </p>
-              {paymentId && (
-                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-100/90 border border-amber-300 font-mono text-xs font-bold text-amber-950">
-                  <span>{paymentId}</span>
-                  <button
-                    type="button"
-                    onClick={() => copyText(paymentId, 'key')}
-                    className="text-amber-800 hover:text-amber-950 cursor-pointer p-0.5"
-                    aria-label={copiedKey ? 'ID tersalin' : 'Salin ID'}
-                  >
-                    {copiedKey ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          {status === 'needs_review' &&
+            notice(
+              'warn',
+              <Clock className="h-4 w-4 text-amber-700" />,
+              en ? 'This payment needs a manual check' : 'Pembayaran ini perlu dicek manual',
+              <>
+                {en ? 'Contact support and quote this payment ID:' : 'Hubungi support dan sebutkan ID pembayaran ini:'}
+                {paymentId && (
+                  <span className="mt-2 flex items-center gap-2">
+                    <code className="min-w-0 break-all rounded-md border border-amber-300 bg-white px-2 py-1 font-mono text-xs text-amber-950">{paymentId}</code>
+                    <button
+                      type="button"
+                      onClick={() => copyText(paymentId, 'key')}
+                      aria-label={copiedKey ? (en ? 'Copied' : 'Tersalin') : en ? 'Copy payment ID' : 'Salin ID pembayaran'}
+                      className={cn('inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-amber-900 hover:bg-amber-100 cursor-pointer', focusRing)}
+                    >
+                      {copiedKey ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </span>
+                )}
+              </>,
+            )}
+
+          {status === 'failed' &&
+            notice(
+              'error',
+              <XCircle className="h-4 w-4 text-red-700" />,
+              en ? 'Payment failed or expired' : 'Pembayaran gagal atau kedaluwarsa',
+              en ? 'No tokens were added. Close this and buy again to get a new invoice.' : 'Belum ada token yang ditambahkan. Tutup ini lalu beli lagi untuk invoice baru.',
+            )}
+
+          {status === 'error' &&
+            notice(
+              'error',
+              <XCircle className="h-4 w-4 text-red-700" />,
+              en ? 'Something went wrong' : 'Ada yang gagal',
+              errorMsg ?? (en ? 'Try again in a moment.' : 'Coba lagi sebentar lagi.'),
+            )}
 
           {status === 'paid' && (
-            <div className="space-y-4">
-              {/* Payment Success Banner */}
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200/80 flex items-start gap-3">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-2xs">
-                  <CheckCircle2 className="h-5 w-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-emerald-950 text-sm">
-                    {locale === 'en' ? 'Payment Successful!' : 'Pembayaran Berhasil!'}
-                  </div>
-                  <div className="text-xs text-emerald-800 font-medium mt-0.5">
-                    {pkg.kind ? packageSummary(pkg as BillingPackage, locale === 'en') : `+${formatCredits(pkg.creditAllowance)}`}
-                  </div>
+            <div className="space-y-5">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" aria-hidden="true" />
+                <div>
+                  <p className="text-sm font-semibold text-neutral-950">{en ? 'Tokens added to your account' : 'Token sudah masuk ke akunmu'}</p>
+                  <p className="text-sm text-neutral-600">
+                    {pkg.kind ? packageSummary(pkg as BillingPackage, en) : `+${formatCredits(pkg.creditAllowance)}`}
+                  </p>
                 </div>
               </div>
 
-              {/* Token Section */}
-              <div className="p-4 rounded-2xl bg-neutral-900 text-white border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <KeyRound className="h-4 w-4 text-emerald-400 shrink-0" />
-                    <span className="text-xs font-bold text-neutral-100">
-                      {locale === 'en' ? 'Active API Token' : 'Token API Siap Pakai'}
-                    </span>
-                  </div>
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded-full font-bold">
-                    {locale === 'en' ? 'Live & Funded' : 'Aktif & Siap'}
-                  </span>
-                </div>
-
-                {isProvisioningToken && (
-                  <div className="flex items-center gap-2 py-3 px-3 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-500">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-300" />
-                    <span>{locale === 'en' ? 'Generating your API token…' : 'Membuat token API Anda…'}</span>
-                  </div>
-                )}
-
-                {!isProvisioningToken && provisionedToken && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 bg-neutral-950 border border-neutral-800 rounded-xl p-2.5">
-                      <code className="font-mono text-xs text-emerald-300 select-all break-all flex-1 px-1">
-                        {provisionedToken}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => copyText(provisionedToken, 'key')}
-                        aria-label={copiedKey ? 'Token tersalin' : 'Salin token'}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white text-xs font-semibold transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-                      >
-                        {copiedKey ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 text-emerald-400" />
-                            <span>{locale === 'en' ? 'Copied' : 'Tersalin'}</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3.5 w-3.5" />
-                            <span>{locale === 'en' ? 'Copy Token' : 'Salin Token'}</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-neutral-500 leading-relaxed">
-                      {locale === 'en'
-                        ? 'Keep this token safe. It is connected directly to your credit balance.'
-                        : 'Simpan token ini di tempat aman. Token ini langsung menggunakan kuota kredit yang baru dibeli.'}
+              {!giftCard && (
+                <section aria-labelledby="new-key-title" className="space-y-2">
+                  <h3 id="new-key-title" className="flex items-center gap-2 text-sm font-semibold text-neutral-950">
+                    <KeyRound className="h-4 w-4 text-neutral-700" aria-hidden="true" />
+                    {en ? 'Your API key' : 'API key kamu'}
+                  </h3>
+                  {isProvisioningToken && (
+                    <p className="flex items-center gap-2 rounded-lg border border-neutral-200 px-3 py-3 text-sm text-neutral-600" role="status">
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      {en ? 'Creating a key…' : 'Membuat key…'}
                     </p>
-                  </div>
-                )}
+                  )}
+                  {!isProvisioningToken && provisionedToken && (
+                    <>
+                      <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-1.5 pl-3">
+                        <code className="min-w-0 flex-1 select-all break-all font-mono text-xs text-neutral-950">{provisionedToken}</code>
+                        <button
+                          type="button"
+                          onClick={() => copyText(provisionedToken, 'key')}
+                          className={cn('inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-md bg-neutral-950 px-3 text-xs font-semibold text-white hover:bg-neutral-800 cursor-pointer', focusRing)}
+                        >
+                          {copiedKey ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          {copiedKey ? (en ? 'Copied' : 'Tersalin') : en ? 'Copy key' : 'Salin key'}
+                        </button>
+                      </div>
+                      <p className="text-xs text-neutral-600">
+                        {en ? 'Shown once. It spends from the balance you just topped up.' : 'Hanya ditampilkan sekali. Key ini memakai saldo yang baru kamu isi.'}
+                      </p>
+                    </>
+                  )}
+                  {provisionError && (
+                    <p className="text-sm text-red-700" role="alert">
+                      {en ? 'Could not create a key here. ' : 'Key belum bisa dibuat di sini. '}
+                      <a href="/dashboard/keys" className={cn('font-semibold underline underline-offset-4 rounded', focusRing)}>
+                        {en ? 'Create one in API keys' : 'Buat lewat menu API keys'}
+                      </a>
+                    </p>
+                  )}
+                </section>
+              )}
 
-                {provisionError && (
-                  <div className="text-xs text-red-400 py-1">
-                    {provisionError}. {locale === 'en' ? 'Manage your keys in' : 'Kelola token di'}{' '}
-                    <a href="/dashboard/keys" className="underline hover:text-red-300">
-                      Dashboard Keys
-                    </a>
-                    .
-                  </div>
-                )}
-              </div>
-
-              {/* Try in Agent / Code Editor Section */}
-              <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200/90 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Code2 className="h-4 w-4 text-neutral-900 shrink-0" />
-                    <span className="text-xs font-bold text-neutral-950 font-heading">
-                      {locale === 'en' ? 'Try in Agent / Code Editor' : 'Coba di Agent / Code Editor'}
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-neutral-500 font-medium">OpenAI Compatible</span>
-                </div>
-
-                {/* Tabs */}
-                <div className="flex rounded-xl bg-neutral-200/60 p-1 gap-1">
+              <section aria-labelledby="setup-title" className="space-y-2">
+                <h3 id="setup-title" className="text-sm font-semibold text-neutral-950">
+                  {en ? 'Use it in your editor' : 'Pakai di editor kamu'}
+                </h3>
+                <div role="tablist" aria-label={en ? 'Setup guide' : 'Panduan setup'} className="flex gap-0.5 overflow-x-auto rounded-lg bg-neutral-100 p-1">
                   {(
                     [
                       { id: 'cursor', label: 'Cursor' },
@@ -813,245 +788,101 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
                     <button
                       key={tab.id}
                       type="button"
+                      role="tab"
+                      aria-selected={activeIdeTab === tab.id}
                       onClick={() => setActiveIdeTab(tab.id)}
-                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950 ${
-                        activeIdeTab === tab.id
-                          ? 'bg-white text-neutral-950 shadow-2xs'
-                          : 'text-neutral-600 hover:text-neutral-900'
-                      }`}
+                      className={cn(
+                        'min-h-10 flex-1 shrink-0 whitespace-nowrap rounded-md px-3 text-xs font-semibold transition-colors cursor-pointer',
+                        focusRing,
+                        activeIdeTab === tab.id ? 'bg-white text-neutral-950 shadow-2xs' : 'text-neutral-600 hover:text-neutral-950',
+                      )}
                     >
                       {tab.label}
                     </button>
                   ))}
                 </div>
-
-                {/* Tab content: Cursor */}
-                {activeIdeTab === 'cursor' && (
-                  <div className="space-y-2 text-xs text-neutral-700">
-                    <p className="text-[11px] text-neutral-600">
-                      {locale === 'en'
-                        ? '1. Open Cursor Settings → Models → OpenAI API Key.'
-                        : '1. Buka Settings Cursor → Models → OpenAI API Key.'}
-                    </p>
-                    <div className="space-y-1.5 font-mono text-[11px]">
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-neutral-200">
-                        <div className="truncate mr-2">
-                          <span className="text-neutral-500 font-sans mr-2">Base URL:</span>
-                          <span className="text-neutral-900 font-semibold">{API_BASE_URL}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => copyText(API_BASE_URL, 'base')}
-                          aria-label={copiedBaseUrl ? 'Base URL tersalin' : 'Salin Base URL'}
-                          className="text-neutral-500 hover:text-neutral-900 cursor-pointer p-1 shrink-0"
-                        >
-                          {copiedBaseUrl ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
-                        </button>
-                      </div>
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-neutral-200">
-                        <div className="truncate mr-2">
-                          <span className="text-neutral-500 font-sans mr-2">Model:</span>
-                          <span className="text-neutral-900 font-semibold">deepseek-v4</span>
-                        </div>
-                        <span className="text-[10px] text-neutral-500 font-sans">atau qwen-max</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab content: Cline / Roo Code */}
-                {activeIdeTab === 'cline' && (
-                  <div className="space-y-2 text-xs text-neutral-700">
-                    <p className="text-[11px] text-neutral-600">
-                      {locale === 'en'
-                        ? 'Select "OpenAI Compatible" as API Provider in Cline settings.'
-                        : 'Pilih "OpenAI Compatible" di menu pengaturan provider Cline / Roo Code.'}
-                    </p>
-                    <div className="space-y-1.5 font-mono text-[11px]">
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-neutral-200">
-                        <div className="truncate mr-2">
-                          <span className="text-neutral-500 font-sans mr-2">Base URL:</span>
-                          <span className="text-neutral-900 font-semibold">{API_BASE_URL}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => copyText(API_BASE_URL, 'base')}
-                          aria-label={copiedBaseUrl ? 'Base URL tersalin' : 'Salin Base URL'}
-                          className="text-neutral-500 hover:text-neutral-900 cursor-pointer p-1 shrink-0"
-                        >
-                          {copiedBaseUrl ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
-                        </button>
-                      </div>
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-neutral-200">
-                        <div className="truncate mr-2">
-                          <span className="text-neutral-500 font-sans mr-2">Model ID:</span>
-                          <span className="text-neutral-900 font-semibold">deepseek-v4</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab content: Claude Code */}
-                {activeIdeTab === 'claudecode' && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] text-neutral-600">
-                      {locale === 'en'
-                        ? 'Export environment variables before running claude in your terminal:'
-                        : 'Export variabel lingkungan berikut di terminal sebelum menjalankan claude:'}
-                    </p>
-                    <div className="relative rounded-xl bg-neutral-950 p-2.5 font-mono text-[11px] text-neutral-200">
-                      <pre className="overflow-x-auto select-all leading-relaxed">{`export ANTHROPIC_BASE_URL="${API_BASE_URL}"\nexport ANTHROPIC_API_KEY="${provisionedToken || 'mp-live-...'}"`}</pre>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyText(
-                            `export ANTHROPIC_BASE_URL="${API_BASE_URL}"\nexport ANTHROPIC_API_KEY="${provisionedToken || 'mp-live-...'}"`,
-                            'snippet'
-                          )
-                        }
-                        aria-label={copiedSnippet ? 'Perintah tersalin' : 'Salin perintah'}
-                        className="absolute top-2 right-2 p-1.5 rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition cursor-pointer"
-                      >
-                        {copiedSnippet ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tab content: cURL */}
-                {activeIdeTab === 'curl' && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] text-neutral-600">
-                      {locale === 'en'
-                        ? 'Run this curl snippet in terminal to test the gateway response:'
-                        : 'Jalankan perintah curl ini di terminal untuk uji coba gateway langsung:'}
-                    </p>
-                    <div className="relative rounded-xl bg-neutral-950 p-2.5 font-mono text-[11px] text-neutral-200">
-                      <pre className="overflow-x-auto select-all leading-relaxed whitespace-pre-wrap">{`curl ${API_BASE_URL}/chat/completions \\\n  -H "Authorization: Bearer ${provisionedToken || 'mp-live-...'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4", "messages": [{"role": "user", "content": "Hello"}]}'`}</pre>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyText(
-                            `curl ${API_BASE_URL}/chat/completions \\\n  -H "Authorization: Bearer ${provisionedToken || 'mp-live-...'}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model": "deepseek-v4", "messages": [{"role": "user", "content": "Hello"}]}'`,
-                            'snippet'
-                          )
-                        }
-                        aria-label={copiedSnippet ? 'Perintah tersalin' : 'Salin perintah'}
-                        className="absolute top-2 right-2 p-1.5 rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition cursor-pointer"
-                      >
-                        {copiedSnippet ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Direct Live Ping action & Docs link */}
-                <div className="flex flex-col sm:flex-row items-center gap-2 pt-1 border-t border-neutral-200/70">
-
-                  <a
-                    href="/docs#ide-setup"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full sm:w-auto py-2 px-3 rounded-xl border border-neutral-200 hover:border-neutral-300 bg-white hover:bg-neutral-50 text-neutral-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+                <p className="text-xs text-neutral-600">{snippets[activeIdeTab].hint}</p>
+                <div className="relative rounded-lg bg-neutral-950">
+                  <pre className="overflow-x-auto p-3 pr-12 font-mono text-xs leading-relaxed text-neutral-100 whitespace-pre">{snippets[activeIdeTab].code}</pre>
+                  <button
+                    type="button"
+                    onClick={() => copyText(snippets[activeIdeTab].code, 'snippet')}
+                    aria-label={copiedSnippet ? (en ? 'Copied' : 'Tersalin') : en ? 'Copy' : 'Salin'}
+                    className="absolute right-1.5 top-1.5 inline-flex h-9 w-9 items-center justify-center rounded-md text-neutral-300 hover:bg-neutral-800 hover:text-white cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                   >
-                    <BookOpen className="h-3.5 w-3.5 text-neutral-600" />
-                    <span>{locale === 'en' ? 'Setup Guides' : 'Panduan Lengkap'}</span>
-                    <ExternalLink className="h-3 w-3 text-neutral-500" />
-                  </a>
+                    {copiedSnippet ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
                 </div>
-              </div>
+                <a
+                  href="/docs#ide-setup"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn('inline-flex min-h-10 items-center gap-1.5 rounded-md text-sm font-medium text-neutral-700 underline underline-offset-4 decoration-neutral-300 hover:text-neutral-950 hover:decoration-neutral-950', focusRing)}
+                >
+                  <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                  {en ? 'Full setup guides' : 'Panduan setup lengkap'}
+                </a>
+              </section>
             </div>
           )}
+        </div>
 
-          {/* Failed State */}
-          {status === 'failed' && (
-            <div className="p-5 rounded-xl bg-red-50 border border-red-100 text-center space-y-1.5">
-              <XCircle className="h-8 w-8 text-red-500 mx-auto" />
-              <div className="font-bold text-red-900 text-sm">
-                {locale === 'en' ? 'Payment failed or expired.' : 'Pembayaran gagal atau kedaluwarsa.'}
-              </div>
-            </div>
-          )}
-
-          {/* Error State */}
-          {status === 'error' && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-100 text-xs text-red-700 text-center space-y-2">
-              <div>{errorMsg ?? (locale === 'en' ? 'An error occurred.' : 'Terjadi kesalahan.')}</div>
-              <button
-                type="button"
-                onClick={() => {
-                  setStatus('idle');
-                  setErrorMsg(null);
-                }}
-                className="text-[11px] font-bold text-red-800 underline hover:text-red-950 cursor-pointer block mx-auto"
-              >
-                {locale === 'en' ? 'Try again' : 'Coba lagi'}
+        {/* Footer: the one primary action for the current state, always in reach. */}
+        {(() => {
+          const primary = cn('inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-neutral-950 px-4 text-sm font-semibold text-white hover:bg-neutral-800 cursor-pointer', focusRing);
+          const quiet = cn('inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-neutral-200 px-4 text-sm font-medium text-neutral-800 hover:border-neutral-300 cursor-pointer', focusRing);
+          let body: React.ReactNode = null;
+          if (paymentProvider === 'duitku' && (status === 'idle' || status === 'error')) {
+            body = (
+              <button id="checkout-pay-btn" type="button" onClick={handleCreateDuitkuPayment} className={primary}>
+                <QrCode className="h-4 w-4" aria-hidden="true" />
+                {existingPayment ? (en ? 'Reopen QRIS invoice' : 'Buka lagi invoice QRIS') : en ? `Pay ${priceLabel} with QRIS` : `Bayar ${priceLabel} dengan QRIS`}
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* Footer actions */}
-        <div className="px-6 pb-6 space-y-2">
-          {paymentProvider === 'duitku' && (status === 'idle' || status === 'error') && (
-            <button
-              id="checkout-pay-btn"
-              onClick={handleCreateDuitkuPayment}
-              className="w-full py-3 rounded-2xl bg-neutral-950 hover:bg-neutral-800 text-white text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
-            >
-              {existingPayment
-                ? (locale === 'en' ? 'Continue Payment with Duitku' : 'Lanjutkan Bayar dengan Duitku')
-                : (locale === 'en' ? 'Pay with Duitku (QRIS / VA)' : 'Bayar dengan Duitku (QRIS / VA)')}
-            </button>
-          )}
-
-          {paymentProvider === 'duitku' && status === 'waiting' && (
-            <button
-              id="checkout-check-btn"
-              onClick={() => {
-                if (paymentId) {
-                  pollAttemptsRef.current = Math.max(0, pollAttemptsRef.current - 5);
-                  pollNowRef.current?.();
-                }
-              }}
-              className="w-full py-2.5 rounded-xl border border-neutral-200 hover:border-neutral-300 text-neutral-700 text-xs font-medium transition-all cursor-pointer flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {locale === 'en' ? 'I have paid, check again' : 'Sudah bayar, cek sekarang'}
-            </button>
-          )}
-
-          {status === 'paid' && (
-            <button
-              id="checkout-close-btn"
-              onClick={onClose}
-              className="w-full py-3 rounded-xl bg-neutral-950 hover:bg-neutral-800 text-white text-sm font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
-            >
-              {locale === 'en' ? 'Done & Close' : 'Selesai & Lanjutkan'}
-            </button>
-          )}
-
-          {(status === 'failed' || status === 'pending_paypal' || status === 'needs_review') && (
-            <button
-              id="checkout-close-btn"
-              onClick={onClose}
-              className="w-full py-3 rounded-xl bg-neutral-950 hover:bg-neutral-800 text-white text-sm font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
-            >
-              {locale === 'en' ? 'Close' : 'Tutup'}
-            </button>
-          )}
-
-          {status !== 'idle' && status !== 'paid' && status !== 'failed' && status !== 'pending_paypal' && status !== 'needs_review' && (
-            <button
-              id="checkout-cancel-btn"
-              onClick={onClose}
-              className="w-full py-2 text-xs text-neutral-500 hover:text-neutral-600 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
-            >
-              {locale === 'en' ? 'Cancel' : 'Batal'}
-            </button>
-          )}
-        </div>
+            );
+          } else if (paymentProvider === 'duitku' && status === 'waiting') {
+            body = (
+              <>
+                <button
+                  id="checkout-check-btn"
+                  type="button"
+                  onClick={() => {
+                    if (paymentId) {
+                      pollAttemptsRef.current = Math.max(0, pollAttemptsRef.current - 5);
+                      pollNowRef.current?.();
+                    }
+                  }}
+                  className={quiet}
+                >
+                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                  {en ? 'I have paid, check now' : 'Sudah bayar, cek sekarang'}
+                </button>
+                <button id="checkout-cancel-btn" type="button" onClick={onClose} className={cn('min-h-10 w-full rounded-lg text-sm text-neutral-600 hover:text-neutral-950 cursor-pointer', focusRing)}>
+                  {en ? 'Close, keep the invoice open' : 'Tutup, invoice tetap terbuka'}
+                </button>
+              </>
+            );
+          } else if (status === 'paid') {
+            body = (
+              <button id="checkout-close-btn" type="button" onClick={onClose} className={primary}>
+                {en ? 'Done' : 'Selesai'}
+              </button>
+            );
+          } else if (status === 'failed' || status === 'pending_paypal' || status === 'needs_review') {
+            body = (
+              <button id="checkout-close-btn" type="button" onClick={onClose} className={primary}>
+                {en ? 'Close' : 'Tutup'}
+              </button>
+            );
+          } else if (status === 'waiting' || status === 'creating') {
+            body = (
+              <button id="checkout-cancel-btn" type="button" onClick={onClose} className={quiet}>
+                {en ? 'Close' : 'Tutup'}
+              </button>
+            );
+          }
+          return body ? <div className="space-y-1 border-t border-neutral-100 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div> : null;
+        })()}
+        <span tabIndex={0} data-focus-guard aria-hidden="true" onFocus={() => focusEdge('first')} />
       </div>
     </div>
   );

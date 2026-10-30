@@ -63,6 +63,11 @@ const MAP: Record<string, (Entry | Existing)[]> = {
     { existing: 'deepseek', providerModelId: 'deepseek-v4-flash', priority: 2, vision: true },
     { provider: 'chutes', providerModelId: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE', priority: 3, inUsd: 0.44, outUsd: 1.32, context: 1048576, maxOutput: 65535, vision: false },
   ],
+  // Legacy alias of the same Flash model (its DeepSeek route sent `deepseek-chat`).
+  'deepseek-v4': [
+    { provider: 'inceptron', providerModelId: 'deepseek-ai/DeepSeek-V4-Flash-0731', priority: 1, inUsd: 0.13, outUsd: 0.495, context: 1048576, maxOutput: 1048576, vision: false },
+    { provider: 'chutes', providerModelId: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE', priority: 2, inUsd: 0.44, outUsd: 1.32, context: 1048576, maxOutput: 65535, vision: false },
+  ],
   'z-ai/glm-5.3-flash': [
     { provider: 'inceptron', providerModelId: 'zai-org/GLM-5.3-Flash', priority: 1, inUsd: 0.17, outUsd: 0.6, context: 1048576, maxOutput: 1048576, vision: false },
   ],

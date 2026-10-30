@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 export default function AdminError({
@@ -10,11 +9,6 @@ export default function AdminError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  useEffect(() => {
-    // Log to console — in production this could also fire an alert
-    console.error('[admin/error]', error);
-  }, [error]);
-
   const isDbTimeout = error.message?.includes('ETIMEDOUT') || error.message?.includes('ECONNREFUSED');
 
   return (

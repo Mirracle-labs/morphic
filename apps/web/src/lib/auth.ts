@@ -171,15 +171,18 @@ export type Session = typeof auth.$Infer.Session;
  * hiccup never blocks the initial page render. Falls back to `null` (guest view)
  * gracefully — the user can still log in normally; auth routes are unaffected.
  */
+/** Public pages hand this to client components, so it carries only what the navbar shows:
+ *  never the session token, IP or user agent, which would be serialized into the page. */
 export async function getSessionSafe(
   reqHeaders: Headers,
-) {
+): Promise<{ user: { name: string; email: string; image: string | null } } | null> {
   try {
     const result = await Promise.race([
       auth.api.getSession({ headers: reqHeaders }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
-    return result ?? null;
+    if (!result?.user) return null;
+    return { user: { name: result.user.name, email: result.user.email, image: result.user.image ?? null } };
   } catch {
     return null;
   }

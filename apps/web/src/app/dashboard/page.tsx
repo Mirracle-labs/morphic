@@ -1,76 +1,12 @@
+// apps/web/src/app/dashboard/page.tsx
+// TypeScript React / Next.js Server Component / Node.js / Linux x86_64
 import { eq, sql, desc, and, or, gt, isNull } from 'drizzle-orm';
 import { getSessionWithRetry } from '@/lib/actions';
 import { db, schema as s } from '@morphic/db';
 import { readyModelIds } from '@morphic/shared/model-readiness';
-import DeveloperGateway, { ModelItem } from '@/components/DeveloperGateway';
+import { memo } from '@/lib/memo';
+import DeveloperGateway from '@/components/DeveloperGateway';
 import { AutoRefresh } from '@/components/AutoRefresh';
-
-/**
- * Fetches active AI models and their provider info directly from PostgreSQL.
- * Maps DB schema attributes to DeveloperGateway UI expectations.
- * Returns undefined if database is offline or empty to allow graceful UI fallback.
- */
-async function getModelsFromDb(): Promise<ModelItem[] | undefined> {
-  try {
-    const dbModels = await db
-      .select({
-        publicModelId: s.models.publicModelId,
-        displayName: s.models.displayName,
-        description: s.models.description,
-        contextLength: s.models.contextLength,
-        capabilities: s.models.capabilities,
-        inputCreditsPer1m: s.models.inputCreditsPer1m,
-        outputCreditsPer1m: s.models.outputCreditsPer1m,
-        providerName: s.providers.name,
-        status: s.models.status,
-      })
-      .from(s.models)
-      .innerJoin(s.providers, eq(s.models.providerId, s.providers.id))
-      .where(eq(s.models.status, 'active'));
-
-    if (!dbModels || dbModels.length === 0) return undefined;
-
-    return dbModels.map((m) => {
-      // Map DB capability array tags to UI CapabilityTag union
-      const caps: ('Chat' | 'Code' | 'Reasoning' | 'Vision' | 'Long Context')[] = [];
-      const rawCaps = Array.isArray(m.capabilities) ? m.capabilities : [];
-      if (rawCaps.includes('coding')) caps.push('Code');
-      if (rawCaps.includes('reasoning')) caps.push('Reasoning');
-      if (rawCaps.includes('chat') || rawCaps.includes('general')) caps.push('Chat');
-      if (rawCaps.includes('multimodal') || rawCaps.includes('vision')) caps.push('Vision');
-      if ((m.contextLength || 0) >= 128000) caps.push('Long Context');
-      if (caps.length === 0) caps.push('Chat');
-
-      const contextK = Math.round((m.contextLength || 0) / 1024);
-      const contextWindow = contextK > 0 ? `${contextK}K Tokens` : '64K Tokens';
-      const formattedProvider = m.providerName
-        ? m.providerName.charAt(0).toUpperCase() + m.providerName.slice(1)
-        : 'Provider';
-
-      return {
-        id: m.publicModelId,
-        name: m.displayName,
-        provider: formattedProvider,
-        capabilities: caps,
-        contextWindow,
-        category: caps.includes('Code') ? 'Coding' : caps.includes('Reasoning') ? 'Reasoning' : caps.includes('Vision') ? 'Multimodal' : 'Chat',
-        // Real per-million credit rates from the catalogue. The daily price, speed grade and
-        // latency this used to derive were invented: nothing measured them.
-        inputCreditsPer1m: m.inputCreditsPer1m ?? undefined,
-        outputCreditsPer1m: m.outputCreditsPer1m ?? undefined,
-        description: {
-          id: m.description || `${m.displayName} AI model`,
-          en: m.description || `${m.displayName} AI model`,
-        },
-        badge: formattedProvider.toUpperCase(),
-        badgeEn: formattedProvider.toUpperCase(),
-      };
-    });
-  } catch (error) {
-    console.warn('[DashboardPage] Failed to fetch active models from database:', error);
-    return undefined;
-  }
-}
 
 interface BalanceSnapshot {
   credits: number;
@@ -109,7 +45,7 @@ async function loadActiveKeyCount(userId: string): Promise<number> {
 }
 
 async function loadUsageTotals(userId: string) {
-  try {
+  return memo(`dashboard:usage-totals:${userId}`, 10_000, async () => {
     const [row] = await db
       .select({
         totalTokens: sql<number>`coalesce(sum(${s.usageRecords.totalTokens}),0)::bigint`,
@@ -123,10 +59,10 @@ async function loadUsageTotals(userId: string) {
       promptTokens: Number(row?.promptTokens ?? 0),
       completionTokens: Number(row?.completionTokens ?? 0),
     };
-  } catch (err) {
+  }).catch((err) => {
     console.warn('[DashboardPage] Database offline, showing empty usage stats:', err);
     return { totalTokens: 0, promptTokens: 0, completionTokens: 0 };
-  }
+  });
 }
 
 async function loadRecentRequests(userId: string): Promise<any[]> {
@@ -161,9 +97,9 @@ const TREND_DAYS = 14;
 
 /** Credits spent per WIB calendar day over the last 14 days, oldest first, zero-filled. */
 async function loadDailySpend(userId: string): Promise<Array<{ day: string; credits: number }>> {
-  const dayKey = (d: Date) => new Date(d.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
-  const days = Array.from({ length: TREND_DAYS }, (_, i) => dayKey(new Date(Date.now() - (TREND_DAYS - 1 - i) * 86_400_000)));
-  try {
+  return memo(`dashboard:daily-spend:${userId}`, 15_000, async () => {
+    const dayKey = (d: Date) => new Date(d.getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
+    const days = Array.from({ length: TREND_DAYS }, (_, i) => dayKey(new Date(Date.now() - (TREND_DAYS - 1 - i) * 86_400_000)));
     const rows = await db
       .select({
         day: sql<string>`to_char(${s.usageRecords.createdAt} at time zone 'Asia/Jakarta', 'YYYY-MM-DD')`,
@@ -174,14 +110,14 @@ async function loadDailySpend(userId: string): Promise<Array<{ day: string; cred
       .groupBy(sql`1`);
     const byDay = new Map(rows.map((r) => [r.day, Number(r.credits)]));
     return days.map((day) => ({ day, credits: byDay.get(day) ?? 0 }));
-  } catch (err) {
+  }).catch((err) => {
     console.warn('[DashboardPage] Daily spend read failed:', err);
     return [];
-  }
+  });
 }
 
 async function loadModelStats() {
-  try {
+  return memo('dashboard:model-stats', 30_000, async () => {
     const [models, providers, pool] = await Promise.all([
       db
         .select({
@@ -214,20 +150,18 @@ async function loadModelStats() {
       avgCreditsPer1m: ready.length ? ready.reduce((a, m) => a + (m.inputCreditsPer1m + m.outputCreditsPer1m) / 2, 0) / ready.length : 0,
       minInputRate: ready.length ? Math.min(...ready.map((m) => m.inputCreditsPer1m)) : 0,
     };
-  } catch (err) {
+  }).catch((err) => {
     console.warn('[DashboardPage] Database offline, showing empty model stats:', err);
     return { modelCount: 0, avgCreditsPer1m: 0, minInputRate: 0 };
-  }
+  });
 }
 
 export default async function DashboardPage() {
   const session = await getSessionWithRetry();
   const userId = session?.user?.id;
 
-  // Every load below is independent of the others. They used to be awaited one after
-  // another, so the page's TTFB was the sum of six round trips (two of them to the gateway)
-  // instead of the slowest one.
-  const [balance, activeKeys, usage, recentRequests, modelStats, initialModels, dailySpend] = await Promise.all([
+  // Every load below is independent of the others and shared via short TTL caches where possible.
+  const [balance, activeKeys, usage, recentRequests, modelStats, dailySpend] = await Promise.all([
     userId ? loadBalance(userId) : Promise.resolve<BalanceSnapshot>({ credits: 0, updatedAt: null }),
     userId ? loadActiveKeyCount(userId) : Promise.resolve(0),
     userId
@@ -235,7 +169,6 @@ export default async function DashboardPage() {
       : Promise.resolve({ totalTokens: 0, promptTokens: 0, completionTokens: 0 }),
     userId ? loadRecentRequests(userId) : Promise.resolve<any[]>([]),
     loadModelStats(),
-    getModelsFromDb(),
     userId ? loadDailySpend(userId) : Promise.resolve([]),
   ]);
 
@@ -244,10 +177,8 @@ export default async function DashboardPage() {
       {/* Balance, usage, recent requests and model stats stay current while the tab is open. */}
       <AutoRefresh intervalMs={30_000} />
       <DeveloperGateway
-        session={session}
         userBalance={balance.credits}
         balanceUpdatedAt={balance.updatedAt}
-        initialModels={initialModels}
         recentRequests={recentRequests}
         serverModelCount={modelStats.modelCount}
         serverAvgCreditsPer1m={modelStats.avgCreditsPer1m}

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits, formatTokenEstimate, timeAgo, API_BASE_URL } from '@/lib/utils';
-import { fmtMultiplier, fmtTokens } from '@/lib/billing-format';
+import { fmtBalance, fmtMultiplier, fmtTokens } from '@/lib/billing-format';
 import GatewayStatusPopover from '@/components/GatewayStatusPopover';
 import QuickstartHub from '@/components/QuickstartHub';
 import { ModelItem } from '@/lib/models-data';
@@ -47,7 +47,6 @@ export interface RecentRequestItem {
  * Interface representing component props for DeveloperGateway.
  */
 interface DeveloperGatewayProps {
-  session?: unknown;
   userBalance?: number;
   balanceUpdatedAt?: string | null;
   /** Active models from the database, passed in by the Server Component. */
@@ -63,7 +62,6 @@ interface DeveloperGatewayProps {
 }
 
 export default function DeveloperGateway({
-  session,
   userBalance = 0,
   balanceUpdatedAt,
   initialModels,
@@ -202,7 +200,7 @@ export default function DeveloperGateway({
             </div>
             <div className="mt-auto pt-6">
               <div suppressHydrationWarning className="text-3xl font-mono font-bold text-neutral-950 tabular-nums">
-                {fmtTokens(balance, !isId)}
+                {fmtBalance(balance, !isId)}
               </div>
               {balance > 0 && avgCreditsPer1m > 0 ? (
                 <div className="mt-1 font-mono text-sm font-semibold text-emerald-700">

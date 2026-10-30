@@ -54,7 +54,7 @@ export default function NavMenu({
       </button>
       {open && (
         <div id={id} className="absolute left-1/2 top-full z-50 -translate-x-1/2 pt-2">
-          <ul className="w-36 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.08)]">
+          <ul className="ui-soft w-36 rounded-2xl border border-neutral-200/70 bg-white p-1.5 shadow-xl">
             {items.map((item) => (
               <li key={item.href}>
                 <Link

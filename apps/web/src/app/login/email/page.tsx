@@ -110,7 +110,6 @@ export default function EmailAuthPage() {
         });
 
         if (res?.error) {
-          console.error('Sign up error:', res.error);
           const isCaptchaErr =
             res.error.message?.toLowerCase().includes('captcha') ||
             (res.error as any).code?.toLowerCase?.().includes('captcha');
@@ -152,7 +151,6 @@ export default function EmailAuthPage() {
         }
 
         if (res?.error) {
-          console.error('Sign in error:', res.error);
           const isCaptchaErr =
             res.error.message?.toLowerCase().includes('captcha') ||
             (res.error as any).code?.toLowerCase?.().includes('captcha');
@@ -170,8 +168,7 @@ export default function EmailAuthPage() {
       setFailCount(0);
       router.push('/dashboard');
       router.refresh();
-    } catch (err: any) {
-      console.error('Email auth error:', err);
+    } catch {
       handleAuthFail(t.login.authGenericError);
     }
   };

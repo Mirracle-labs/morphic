@@ -14,6 +14,9 @@ import { readFileSync } from 'node:fs';
 import { db, schema as s } from '@morphic/db';
 import { eq, inArray, sql } from 'drizzle-orm';
 
+// neon-http returns { rows }, postgres-js (the local test DB) returns the rows array itself.
+const rowsOf = (r: unknown) => ((r as { rows?: Record<string, unknown>[] }).rows ?? (r as Record<string, unknown>[]));
+
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const created = {
@@ -24,7 +27,7 @@ const created = {
 
 async function tableExists(): Promise<boolean> {
   const result = await db.execute(sql`SELECT to_regclass('public.model_provider_pool') AS reg`);
-  return Boolean(result.rows[0]?.reg);
+  return Boolean(rowsOf(result)[0]?.reg);
 }
 
 async function mkProvider() {
@@ -128,7 +131,7 @@ test('1B: migration created model_provider_pool with the required shape', async 
     ORDER BY ordinal_position
   `);
   const byName = new Map(
-    columns.rows.map((row) => [String(row.column_name), { type: String(row.data_type), nullable: row.is_nullable === 'YES' }]),
+    rowsOf(columns).map((row) => [String(row.column_name), { type: String(row.data_type), nullable: row.is_nullable === 'YES' }]),
   );
 
   const expected: Record<string, { type: string; nullable: boolean }> = {
@@ -172,10 +175,10 @@ test('1B: migration created model_provider_pool with the required shape', async 
     WHERE t.relname = 'model_provider_pool' AND c.contype = 'f'
     ORDER BY c.conname
   `);
-  assert.equal(fks.rows.length, 2, 'expected exactly two foreign keys');
+  assert.equal(rowsOf(fks).length, 2, 'expected exactly two foreign keys');
   // confdeltype 'r' = ON DELETE RESTRICT
   assert.deepEqual(
-    fks.rows.map((row) => [String(row.conname), String(row.confdeltype)]),
+    rowsOf(fks).map((row) => [String(row.conname), String(row.confdeltype)]),
     [
       ['model_provider_pool_model_id_models_id_fk', 'r'],
       ['model_provider_pool_provider_id_providers_id_fk', 'r'],
@@ -187,7 +190,7 @@ test('1B: migration created model_provider_pool with the required shape', async 
     FROM pg_indexes
     WHERE schemaname = 'public' AND tablename = 'model_provider_pool'
   `);
-  const defs = indexes.rows.map((row) => String(row.indexdef));
+  const defs = rowsOf(indexes).map((row) => String(row.indexdef));
   assert.ok(
     defs.some(
       (def) =>

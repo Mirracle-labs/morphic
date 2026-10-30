@@ -257,7 +257,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
 
   return createPortal(
     <AnimatePresence>
-      <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] sm:pt-[16vh] px-4">
+      <div className="ui-soft fixed inset-0 z-[9999] flex items-start justify-center pt-[14vh] sm:pt-[16vh] px-4">
         {/* Full-screen smooth backdrop blur covering 100% of viewport without clipping */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -265,7 +265,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18 }}
           onClick={onClose}
-          className="fixed inset-0 bg-neutral-950/45 backdrop-blur-md"
+          className="fixed inset-0 bg-neutral-950/40"
         />
 
         {/* Solid, sharp Command Dialog Box (Linear/Raycast aesthetic) */}
@@ -278,7 +278,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
           exit={{ opacity: 0, scale: 0.98, y: -8 }}
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
           onKeyDown={handleKeyDownList}
-          className="relative w-full max-w-xl rounded-2xl border border-neutral-200 bg-white shadow-[0_24px_64px_-12px_rgba(0,0,0,0.22),0_0_0_1px_rgba(0,0,0,0.05)] overflow-hidden flex flex-col z-10"
+          className="relative w-full max-w-xl rounded-3xl border border-neutral-200/70 bg-white shadow-xl overflow-hidden flex flex-col z-10"
         >
           {/* Top Search Input Bar */}
           <div className="flex items-center gap-3 px-4.5 py-3.5 border-b border-neutral-100 bg-white">

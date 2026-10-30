@@ -1,10 +1,43 @@
-import { eq, asc, desc, and, gt, inArray, sql } from 'drizzle-orm';
+import { eq, asc, desc, and, gt, sql } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
 import { requireUser } from '@/lib/actions';
 import { getBalance } from '@morphic/db/billing';
+import { readyModelIds } from '@morphic/shared/model-readiness';
 import { BillingView } from './billing-view';
 
-const SHOWCASE_MODELS = ['openai/gpt-6-luna', 'deepseek/deepseek-v4.1-flash', 'anthropic/claude-haiku-5.5', 'anthropic/claude-sonnet-5.5'];
+/** Four routable models spread from cheapest to dearest output, for the "how far do N tokens go" strip. */
+async function loadShowcase() {
+  const [models, providers, pool] = await Promise.all([
+    db
+      .select({
+        id: s.models.id,
+        providerId: s.models.providerId,
+        fallbackProviderId: s.models.fallbackProviderId,
+        publicModelId: s.models.publicModelId,
+        name: s.models.displayName,
+        out: s.models.outputCreditsPer1m,
+      })
+      .from(s.models)
+      .where(eq(s.models.status, 'active')),
+    // Credential columns only decide readiness; they never reach the page.
+    db
+      .select({
+        id: s.providers.id,
+        status: s.providers.status,
+        encryptedCredentials: s.providers.encryptedCredentials,
+        credentialReference: s.providers.credentialReference,
+      })
+      .from(s.providers),
+    db
+      .select({ modelId: s.modelProviderPool.modelId, providerId: s.modelProviderPool.providerId, isEnabled: s.modelProviderPool.isEnabled })
+      .from(s.modelProviderPool),
+  ]);
+  const ids = readyModelIds(models, providers, pool);
+  // Skip near-free local models: "10M tokens buy 100 billion" would only mislead.
+  const ready = models.filter((m) => ids.has(m.id) && m.out >= 1_000_000).sort((a, b) => a.out - b.out);
+  const picks = ready.length <= 4 ? ready : [0, 1, 2, 3].map((i) => ready[Math.round((i * (ready.length - 1)) / 3)]!);
+  return picks.map((m) => ({ id: m.publicModelId, name: m.name, out: m.out }));
+}
 
 export default async function BillingPage(props: {
   searchParams?: Promise<{ tab?: string }>;
@@ -73,9 +106,23 @@ export default async function BillingPage(props: {
         console.warn('[BillingPage] Entitlement read failed:', err);
         return [] as any[];
       }),
+    // Explicit columns: capture ids, reconcile timestamps and refund amounts stay on the server.
     db
-      .select()
+      .select({
+        id: s.payments.id,
+        provider: s.payments.provider,
+        externalId: s.payments.externalId,
+        packageId: s.payments.packageId,
+        packageName: s.packages.name,
+        amountCents: s.payments.amountCents,
+        currency: s.payments.currency,
+        credits: s.payments.credits,
+        status: s.payments.status,
+        paidAt: s.payments.paidAt,
+        createdAt: s.payments.createdAt,
+      })
       .from(s.payments)
+      .leftJoin(s.packages, eq(s.payments.packageId, s.packages.id))
       .where(eq(s.payments.userId, user.id))
       .orderBy(desc(s.payments.createdAt))
       .limit(20)
@@ -107,12 +154,7 @@ export default async function BillingPage(props: {
         return [] as any[];
       }),
     // Real multipliers for the "how far do 10M tokens go" strip, cheap to expensive.
-    db
-      .select({ id: s.models.publicModelId, name: s.models.displayName, out: s.models.outputCreditsPer1m })
-      .from(s.models)
-      .where(and(inArray(s.models.publicModelId, SHOWCASE_MODELS), eq(s.models.status, 'active')))
-      .orderBy(asc(s.models.outputCreditsPer1m))
-      .catch(() => [] as { id: string; name: string; out: number }[]),
+    loadShowcase().catch(() => [] as { id: string; name: string; out: number }[]),
   ]);
 
   return (

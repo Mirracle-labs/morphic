@@ -118,8 +118,8 @@ export function LogsView({ total, recent }: LogsViewProps) {
         setPage(res.page || targetPage);
         setTotalCount(res.total);
       }
-    } catch (err) {
-      console.warn('[UsageView] Error fetching usage data:', err);
+    } catch {
+      // Keep the rows already on screen; the next page change retries.
     } finally {
       setIsLoadingPage(false);
     }

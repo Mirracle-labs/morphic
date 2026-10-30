@@ -491,6 +491,41 @@
    ]
   },
   {
+   "slug": "openai/gpt-6.1-terra",
+   "name": "GPT-6.1 Terra",
+   "maker": "OpenAI",
+   "makerLogo": "/logos/catalog/gpt.svg",
+   "description": "GPT-6.1 Terra is the mid-tier model in OpenAI’s GPT-6.1 series, built for agentic workloads such as multi-step tool use, coding, and computer use. It delivers stronger agent performance than the previous Terra at half the price of GPT-6.1 Sol, with a 1.05M-token context window and up to 128K output tokens.",
+   "aliases": [
+    "gpt-6.1-terra"
+   ],
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ],
+   "contextLength": 1050000,
+   "maxOutput": 128000,
+   "inputUsd": [
+    1,
+    2
+   ],
+   "outputUsd": [
+    5,
+    7.5
+   ],
+   "reasoning": true,
+   "published": "2026-10-26",
+   "providers": [
+    {
+     "name": "OpenAI",
+     "logo": "/logos/catalog/gpt.svg"
+    }
+   ]
+  },
+  {
    "slug": "openai/gpt-6.1-sol",
    "name": "GPT-6.1 Sol",
    "maker": "OpenAI",

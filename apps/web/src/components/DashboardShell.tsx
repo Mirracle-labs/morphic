@@ -1,3 +1,5 @@
+// apps/web/src/components/DashboardShell.tsx
+// TypeScript React / Next.js Client Component / Browser + SSR / Linux x86_64
 'use client';
 
 import React, { Fragment, useEffect, useState } from 'react';
@@ -55,11 +57,16 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
   const { t, locale } = useTranslation();
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Optimistic active tab so clicking a sidebar tab highlights immediately before the RSC response settles.
+  // It remembers the path it was clicked from, so it lapses on its own once navigation lands.
+  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
+  const setPendingHref = (href: string) => setPending({ href, from: pathname });
   // Dismissal is a per-browser convenience; blocked storage just keeps showing the banner.
   const [promoDismissed, setPromoDismissed] = useLocalStorage('morphic:promo-dismissed');
   const promoOpen = promoDismissed !== '1';
   const dismissPromo = () => setPromoDismissed('1');
 
+  const activePathname = pending?.from === pathname ? pending.href : pathname;
 
   const overviewItem = { href: '/dashboard', label: t.dashboard.navOverview, icon: LayoutDashboard };
 
@@ -81,7 +88,7 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
     { href: '/admin', label: locale === 'en' ? 'Admin panel' : 'Panel admin', icon: ShieldCheck },
   ];
 
-  const isActive = (href: string) => pathname === href;
+  const isActive = (href: string) => activePathname === href;
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -102,7 +109,11 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
       <Link
         key={item.href}
         href={item.href}
-        onClick={() => setMobileNavOpen(false)}
+        prefetch={true}
+        onClick={() => {
+          setPendingHref(item.href);
+          setMobileNavOpen(false);
+        }}
         aria-current={active ? 'page' : undefined}
         className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${focusRing} ${
           active
@@ -157,7 +168,11 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
       <div className="mt-auto mx-3 pt-4 border-t border-neutral-200 flex flex-col gap-1">
         <Link
           href="/dashboard/redeem"
-          onClick={() => setMobileNavOpen(false)}
+          prefetch={true}
+          onClick={() => {
+            setPendingHref('/dashboard/redeem');
+            setMobileNavOpen(false);
+          }}
           className={`flex items-stretch overflow-hidden rounded-xl border border-neutral-200 bg-white hover:border-neutral-400 transition-colors ${focusRing}`}
         >
           <span className="relative w-14 shrink-0 bg-neutral-950">
@@ -226,11 +241,21 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           <Gift className="hidden sm:block h-4 w-4 shrink-0 text-neutral-700" aria-hidden="true" />
           <p suppressHydrationWarning>
             {locale === 'en' ? 'Get ' : 'Dapatkan '}
-            <Link href="/dashboard/billing" className={`font-semibold text-sky-700 underline underline-offset-2 hover:text-sky-900 rounded ${focusRing}`}>
+            <Link
+              href="/dashboard/billing"
+              prefetch={true}
+              onClick={() => setPendingHref('/dashboard/billing')}
+              className={`font-semibold text-sky-700 underline underline-offset-2 hover:text-sky-900 rounded ${focusRing}`}
+            >
               {locale === 'en' ? '5% off service fee' : 'diskon 5% biaya layanan'}
             </Link>
             {locale === 'en' ? ' on top-up, and exclusive gifts for ' : ' untuk top-up, dan hadiah eksklusif untuk '}
-            <Link href="/dashboard/redeem" className={`font-semibold text-sky-700 underline underline-offset-2 hover:text-sky-900 rounded ${focusRing}`}>
+            <Link
+              href="/dashboard/redeem"
+              prefetch={true}
+              onClick={() => setPendingHref('/dashboard/redeem')}
+              className={`font-semibold text-sky-700 underline underline-offset-2 hover:text-sky-900 rounded ${focusRing}`}
+            >
               {locale === 'en' ? 'referring friends' : 'ajak teman'}
             </Link>
           </p>
@@ -297,6 +322,8 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           </nav>
           <Link
             href="/dashboard/billing"
+            prefetch={true}
+            onClick={() => setPendingHref('/dashboard/billing')}
             className={`inline-flex items-center gap-2 h-9 pl-3 pr-1 rounded-full bg-white border border-neutral-200 hover:border-neutral-300 transition-colors ${focusRing}`}
           >
             <span className="text-sm font-mono font-semibold text-neutral-950 tabular-nums">
@@ -315,6 +342,8 @@ export function DashboardShell({ session, balance, isAdmin = false, notification
           <NotificationsDrawer items={notifications} en={locale === 'en'} />
           <Link
             href="/dashboard/settings"
+            prefetch={true}
+            onClick={() => setPendingHref('/dashboard/settings')}
             title={t.dashboard.navSettings}
             aria-label={t.dashboard.navSettings}
             aria-current={isActive('/dashboard/settings') ? 'page' : undefined}

@@ -477,7 +477,7 @@ export function RedeemView({
         ref={giftDialogRef}
         aria-labelledby="gift-title"
         onClick={(e) => e.target === giftDialogRef.current && giftDialogRef.current?.close()}
-        className="m-auto w-[calc(100%-2rem)] max-w-4xl rounded-2xl bg-white p-0 shadow-xl backdrop:bg-black/40"
+        className="m-auto w-[calc(100%-2rem)] max-w-4xl rounded-3xl border border-neutral-200/70 bg-white p-0 shadow-xl backdrop:bg-neutral-950/40"
       >
         <form onSubmit={startGiftCheckout} className="p-6 sm:p-7">
           <div className="flex items-center justify-between gap-3 mb-6">
@@ -613,7 +613,7 @@ export function RedeemView({
         ref={dialogRef}
         aria-labelledby="redeem-title"
         onClick={(e) => e.target === dialogRef.current && dialogRef.current?.close()}
-        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl bg-white p-0 shadow-xl backdrop:bg-black/40"
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-3xl border border-neutral-200/70 bg-white p-0 shadow-xl backdrop:bg-neutral-950/40"
       >
         <div className="p-6 space-y-5">
           <div className="flex items-start justify-between gap-3">

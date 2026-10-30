@@ -116,7 +116,8 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
         return;
       }
       await signOut();
-      window.location.href = '/login?deleted=true';
+      router.replace('/login?deleted=true');
+      router.refresh();
     } catch (err: any) {
       setDeleteError(err?.message || (isId ? 'Terjadi kesalahan sistem.' : 'A system error occurred.'));
       setIsDeletingAccount(false);
@@ -698,7 +699,7 @@ export function SettingsView({ user, sessions, loginOtp }: SettingsViewProps) {
           onClick={(e) => {
             if (e.target === e.currentTarget && !isDeletingAccount) closeDeleteModal();
           }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/40 p-4 animate-in fade-in duration-150"
         >
           <div
             role="dialog"

@@ -21,22 +21,22 @@ export interface ReadinessPoolRow {
   isEnabled: boolean;
 }
 
+/** An active provider with a stored key, or an env: reference whose variable is set. */
+export function providerUsable(p: ReadinessProvider, env: Record<string, string | undefined> = process.env): boolean {
+  return (
+    p.status === 'active' &&
+    (Boolean(p.encryptedCredentials) ||
+      Boolean(p.credentialReference?.startsWith('env:') && env[p.credentialReference.slice(4)]?.trim()))
+  );
+}
+
 export function readyModelIds(
   models: ReadinessModel[],
   providers: ReadinessProvider[],
   pool: ReadinessPoolRow[],
   env: Record<string, string | undefined> = process.env,
 ): Set<string> {
-  const usable = new Set(
-    providers
-      .filter(
-        (p) =>
-          p.status === 'active' &&
-          (Boolean(p.encryptedCredentials) ||
-            (p.credentialReference?.startsWith('env:') && Boolean(env[p.credentialReference.slice(4)]?.trim()))),
-      )
-      .map((p) => p.id),
-  );
+  const usable = new Set(providers.filter((p) => providerUsable(p, env)).map((p) => p.id));
   const poolBy = new Map<string, string[]>();
   if (env.POOL_ENABLED === 'true') {
     for (const r of pool) if (r.isEnabled) poolBy.set(r.modelId, [...(poolBy.get(r.modelId) ?? []), r.providerId]);

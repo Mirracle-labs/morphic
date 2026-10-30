@@ -115,7 +115,7 @@ export default function GatewayStatusPopover() {
         <div
           role="dialog"
           aria-label={t.dashboard.statusTitle}
-          className="absolute right-0 top-full z-50 mt-2 w-76 rounded-xl border border-neutral-200/90 bg-white p-4 shadow-xl shadow-neutral-950/5 animate-in fade-in slide-in-from-top-1 duration-150"
+          className="ui-soft absolute right-0 top-full z-50 mt-2 w-76 rounded-2xl border border-neutral-200/70 bg-white p-4 shadow-xl animate-in fade-in slide-in-from-top-1 duration-150"
         >
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>

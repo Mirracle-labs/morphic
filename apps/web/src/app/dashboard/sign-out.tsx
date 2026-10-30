@@ -25,7 +25,6 @@ export function SignOutButton({ className, children }: SignOutButtonProps) {
     try {
       const res = await signOut();
       if (res?.error) {
-        console.error('Sign-out error:', res.error.code ?? res.error.status, res.error.message);
         setFailed(true);
         setIsSigningOut(false);
         return;
@@ -34,8 +33,7 @@ export function SignOutButton({ className, children }: SignOutButtonProps) {
       // refresh() so the server components drop the cached signed-in tree.
       router.replace('/login');
       router.refresh();
-    } catch (err) {
-      console.error('Sign-out error:', err);
+    } catch {
       setFailed(true);
       setIsSigningOut(false);
     }

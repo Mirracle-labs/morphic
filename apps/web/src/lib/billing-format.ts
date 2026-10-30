@@ -1,6 +1,6 @@
 // Shared billing copy: token amounts, what a package delivers, and its price in the viewer's
 // currency. Indonesian shows Rupiah (Duitku), English shows USD (PayPal); both buy the same package.
-import { BALANCE_CREDITS_PER_IDR, IDR_PER_1M_BASE_TOKENS, TOKEN_PACK_HOURS, multiplier, packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
+import { BALANCE_CREDITS_PER_IDR, IDR_PER_1M_BASE_TOKENS, IDR_PER_USD, TOKEN_PACK_HOURS, multiplier, packagePriceIdr, packagePriceUsdCents } from '@morphic/shared/credits';
 
 export type PackageKind = 'balance' | 'tokens' | 'unlimited';
 
@@ -13,6 +13,7 @@ export interface BillingPackage {
   priceCents: number | null;
   currency: string;
   modelDisplayName?: string | null;
+  modelPublicId?: string | null;
 }
 
 /** "10 jt" / "10M": the number alone, for big display figures. */
@@ -26,6 +27,12 @@ export function fmtTokens(n: number, en: boolean): string {
 
 /** Rupiah a balance is worth at the top-up rate, for the "≈ Rp" hint. */
 export const balanceIdr = (credits: number) => Math.floor(credits / BALANCE_CREDITS_PER_IDR);
+
+/** Balance credits as money at the top-up rate: "Rp20.000" / "$1.10". */
+export function fmtBalance(credits: number, en: boolean): string {
+  const idr = balanceIdr(credits);
+  return en ? `$${(idr / IDR_PER_USD).toFixed(2)}` : `Rp${idr.toLocaleString('id-ID')}`;
+}
 
 export function fmtDuration(hours: number, en: boolean): string {
   if (hours % 24 === 0) {
@@ -59,7 +66,10 @@ export function packageSummary(pkg: BillingPackage, en: boolean): string {
       ? `${tokens} for any model, charged by each model's multiplier. Valid ${span}.`
       : `${tokens} untuk semua model, dipotong sesuai multiplier model. Berlaku ${span}.`;
   }
-  return en ? `${tokens} added to your balance. Never expires.` : `${tokens} masuk ke saldo. Tidak hangus.`;
+  const money = fmtBalance(pkg.creditAllowance, en);
+  return en
+    ? `${money} added to your balance, spent at each model's per-token price. Never expires.`
+    : `${money} masuk ke saldo, terpakai sesuai harga per token tiap model. Tidak hangus.`;
 }
 
 /** A model price (credits per 1M) as its token multiplier: "520x", "5,2x". */

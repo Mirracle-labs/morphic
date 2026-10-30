@@ -36,7 +36,7 @@ export function PayPalButton({
   if (!clientId) {
     return (
       <div className="p-3 text-xs text-rose-600 bg-rose-50 rounded-xl border border-rose-200">
-        PayPal Client ID missing. Please set NEXT_PUBLIC_PAYPAL_CLIENT_ID in .env.
+        PayPal is unavailable right now. Please try again later.
       </div>
     );
   }
@@ -181,9 +181,8 @@ export function PayPalButton({
                 onError(msg);
               }
             }}
-            onError={(err) => {
+            onError={() => {
               setLoading(false);
-              console.error('[PayPalButton] SDK error:', err);
               onError('PayPal encountered an error. Please try again.');
             }}
             onCancel={() => {

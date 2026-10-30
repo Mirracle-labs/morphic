@@ -1,15 +1,19 @@
+// /home/riyan/Downloads/Projects/morphic/apps/web/src/app/dashboard/models/models-view.tsx
+// typescript / models-view.tsx / next-client / @morphic/web
+
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue } from 'react';
 import { useTranslation } from '@/lib/i18n';
 import { formatCredits, CHAT_COMPLETIONS_URL } from '@/lib/utils';
 import { fmtIdrPer1m, fmtMultiplier } from '@/lib/billing-format';
-import { Search, Terminal, Copy, Check, Cpu } from 'lucide-react';
+import { Search, Terminal, Copy, Check } from 'lucide-react';
 import { ModelProviderLogo } from '@/components/ProviderLogos';
 
 export function ModelsView({ initialModels }: { initialModels: any[] }) {
   const { t, locale } = useTranslation();
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
   const [selectedCap, setSelectedCap] = useState('All');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState<string>(
@@ -29,6 +33,22 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
     setTimeout(() => setCopiedCurl(false), 2000);
   };
 
+  // Precompute normalized search haystacks and lowercase capability sets once per catalog load.
+  const indexedModels = useMemo(() => {
+    return initialModels.map((m) => {
+      const lowerCaps = (m.capabilities ?? []).map((c: string) => c.toLowerCase());
+      const haystack = [m.displayName, m.publicModelId, m.providerName, m.description, m.descriptionEn, ...lowerCaps]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return {
+        ...m,
+        _haystack: haystack,
+        _lowerCaps: lowerCaps,
+      };
+    });
+  }, [initialModels]);
+
   // Filter tabs come from the capability tags the catalog actually has, so no tab can be empty by design.
   const capTabs = useMemo(() => {
     const labels: Record<string, { en: string; id: string }> = {
@@ -40,39 +60,35 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
       multimodal: { en: 'Multimodal', id: 'Multimodal' },
     };
     const caps = new Set<string>();
-    initialModels.forEach((m) => (m.capabilities ?? []).forEach((c: string) => caps.add(c.toLowerCase())));
-    const readyCount = initialModels.filter((m) => m.ready !== false).length;
+    indexedModels.forEach((m) => m._lowerCaps.forEach((c: string) => caps.add(c)));
+    const readyCount = indexedModels.filter((m) => m.ready !== false).length;
     return [
       { id: 'All', label: t.dashboard.filterAllCap },
       // Route availability, not a capability tag; shown only when the catalog has both kinds.
-      ...(readyCount > 0 && readyCount < initialModels.length
+      ...(readyCount > 0 && readyCount < indexedModels.length
         ? [
             { id: 'ready', label: `Ready (${readyCount})` },
-            { id: 'unready', label: `Unready (${initialModels.length - readyCount})` },
+            { id: 'unready', label: `Unready (${indexedModels.length - readyCount})` },
           ]
         : []),
       ...[...caps].sort().map((c) => ({ id: c, label: labels[c]?.[locale === 'en' ? 'en' : 'id'] ?? c })),
     ];
-  }, [initialModels, locale, t.dashboard.filterAllCap]);
+  }, [indexedModels, locale, t.dashboard.filterAllCap]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return initialModels.filter((m) => {
-      const haystack = [m.displayName, m.publicModelId, m.providerName, m.description, ...(m.capabilities ?? [])]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      const matchSearch = !q || haystack.includes(q);
+    const q = deferredSearch.trim().toLowerCase();
+    return indexedModels.filter((m) => {
+      const matchSearch = !q || m._haystack.includes(q);
 
       const matchCap =
         selectedCap === 'All' ||
         (selectedCap === 'ready' && m.ready !== false) ||
         (selectedCap === 'unready' && m.ready === false) ||
-        (m.capabilities && m.capabilities.some((c: string) => c.toLowerCase() === selectedCap));
+        m._lowerCaps.includes(selectedCap);
 
       return matchSearch && matchCap;
     });
-  }, [initialModels, search, selectedCap]);
+  }, [indexedModels, deferredSearch, selectedCap]);
 
   const activeModel =
     filtered.find((m: any) => m.publicModelId === selectedModelId) ||

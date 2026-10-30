@@ -47,7 +47,15 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </p>
       )}
       <SettingsView
-      user={{ ...user, role: account?.role ?? null, emailVerified: account?.emailVerified ?? null }}
+      user={{
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image ?? null,
+        createdAt: user.createdAt,
+        role: account?.role ?? null,
+        emailVerified: account?.emailVerified ?? null,
+      }}
       sessions={sessions}
       loginOtp={{ enabled: account?.twoFactorEnabled ?? false, hasPassword: account?.hasPassword ?? false }}
       />

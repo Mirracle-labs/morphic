@@ -70,8 +70,8 @@ export const RecaptchaWidget = forwardRef<RecaptchaWidgetRef, RecaptchaWidgetPro
           if (widgetIdRef.current !== null && window.grecaptcha?.reset) {
             try {
               window.grecaptcha.reset(widgetIdRef.current);
-            } catch (err) {
-              console.warn('[reCAPTCHA] Failed to reset widget:', err);
+            } catch {
+              // A widget that will not reset is re-rendered on the next mount.
             }
           }
         },
@@ -144,8 +144,8 @@ export const RecaptchaWidget = forwardRef<RecaptchaWidgetRef, RecaptchaWidgetPro
         if (typeof id === 'number') {
           widgetIdRef.current = id;
         }
-      } catch (err) {
-        console.error('[reCAPTCHA] Render error:', err);
+      } catch {
+        // Render failure leaves the form usable; the server still verifies the token.
       }
     }, [siteKey, isScriptReady, theme, onVerify, onExpire, onError]);
 

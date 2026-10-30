@@ -14,6 +14,13 @@ if (fs.existsSync(rootEnv) && typeof process.loadEnvFile === 'function') {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ['@morphic/db', '@morphic/shared'],
+  poweredByHeader: false,
+  productionBrowserSourceMaps: false,
+  // Strips console.log/info/debug in production. The transform also runs on server code, so
+  // error/warn stay: they are the server's diagnostics (DB read failures, auth retries).
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production' ? { exclude: ['error', 'warn'] } : false,
+  },
   output: process.env.VERCEL || process.env.NETLIFY ? undefined : 'standalone',
   images: {
     remotePatterns: [
