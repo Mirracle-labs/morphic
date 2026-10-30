@@ -38,7 +38,9 @@ export function appFromRequest(h: Headers): string | null {
 
   const ua = known(h.get('user-agent') ?? '');
   if (ua) return ua;
-  // OpenCode tags every model request with its session id, even when an SDK rewrites the User-Agent.
+  // Agent-specific headers survive an SDK rewriting the User-Agent (captured from the real clients).
   if (h.has('x-opencode-session-id')) return 'OpenCode';
+  if (h.has('x-claude-code-session-id')) return 'Claude Code';
+  if (/^codex/i.test(h.get('originator') ?? '') || h.has('x-codex-turn-metadata')) return 'Codex';
   return null;
 }

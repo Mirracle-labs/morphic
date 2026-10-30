@@ -510,10 +510,10 @@ export async function startCompletion(input: StartCompletionInput): Promise<Comp
     }
 
     if (!res.ok) {
-      const norm = normalizeUpstreamError(res.status);
       // Internal only: status is never returned to the client.
       console.warn('[gateway] upstream status', { requestId, status: res.status });
       const errText = await res.text().catch(() => '');
+      const norm = normalizeUpstreamError(res.status, errText);
       return {
         ok: false,
         norm,

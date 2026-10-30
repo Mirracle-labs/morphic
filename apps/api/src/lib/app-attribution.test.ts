@@ -22,3 +22,13 @@ test('appFromRequest: OpenCode 1.19 headers on a custom OpenAI-compatible provid
   // SDK-rewritten User-Agent still credited through the session header.
   assert.equal(app({ 'user-agent': 'ai-sdk/openai-compatible/1.0.0', 'x-opencode-session-id': 'ses_2' }), 'OpenCode');
 });
+
+test('appFromRequest: Claude Code and Codex headers, also when the User-Agent is rewritten', () => {
+  // Captured 2026-10-30: claude-cli 2.1.314 on /v1/messages, codex-cli 0.166.0 on /v1/responses.
+  assert.equal(app({ 'user-agent': 'claude-cli/2.1.314 (external, sdk-cli)', 'x-app': 'cli', 'x-claude-code-session-id': 's' }), 'Claude Code');
+  assert.equal(app({ 'user-agent': 'Anthropic/JS 0.128.0', 'x-claude-code-session-id': 's' }), 'Claude Code');
+  assert.equal(app({ 'user-agent': 'codex_exec/0.166.0 (Fedora 43.0.0; x86_64)', originator: 'codex_exec' }), 'Codex');
+  assert.equal(app({ 'user-agent': 'reqwest/0.12', originator: 'codex_cli_rs' }), 'Codex');
+  assert.equal(app({ 'user-agent': 'OpenAI/JS 5.0.0', 'x-codex-turn-metadata': '{}' }), 'Codex');
+  assert.equal(app({ 'user-agent': 'OpenAI/JS 5.0.0', originator: 'my-tool' }), null);
+});

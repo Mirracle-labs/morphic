@@ -1018,7 +1018,17 @@ export interface NormalizedError {
  * Appendix B, single source of truth. The final client envelope is built from
  * `httpStatus`/`type`/`code`; upstream text and status are never included.
  */
-export function normalizeUpstreamError(upstreamStatus: UpstreamErrorInput): NormalizedError {
+// Providers that report an empty account balance as a plain 400/422 instead of 402.
+const OUT_OF_CREDIT = /insufficient[ _-]?(balance|credit|fund|quota)|quota[ _-]?exceeded|out of credits?|balance[ _-]?(exhausted|too low|is not enough)|payment[ _-]?required|billing/i;
+
+/**
+ * `body` (the upstream error text) only matters for a non-failover 4xx: an out-of-credit
+ * message there is treated as 402 so the next pool entry serves the same request.
+ */
+export function normalizeUpstreamError(upstreamStatus: UpstreamErrorInput, body?: string): NormalizedError {
+  if (typeof upstreamStatus === 'number' && upstreamStatus >= 400 && upstreamStatus < 500 && body && OUT_OF_CREDIT.test(body)) {
+    upstreamStatus = 402;
+  }
   if (upstreamStatus === 'client_abort') {
     // No meaningful response: the client is gone. Never counts against the provider.
     return {

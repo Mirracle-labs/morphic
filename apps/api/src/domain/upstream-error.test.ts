@@ -45,3 +45,17 @@ for (const row of rows) {
     assert.equal(norm.type, row.code === 'provider_rate_limited' ? 'rate_limit_error' : 'server_error');
   });
 }
+
+test('an out-of-credit 400/422 fails over like 402; other 4xx bodies do not', () => {
+  for (const [status, body] of [
+    [400, '{"error":{"message":"Insufficient balance"}}'],
+    [422, '{"detail":"Quota exceeded for this account"}'],
+    [403, 'insufficient_quota'],
+  ] as const) {
+    const norm = normalizeUpstreamError(status, body);
+    assert.equal(norm.failover, true, body);
+    assert.equal(norm.code, 'provider_auth_failed');
+  }
+  assert.equal(normalizeUpstreamError(400, '{"error":"max_tokens exceeds context length"}').failover, false);
+  assert.equal(normalizeUpstreamError(500, 'insufficient balance').code, 'provider_error');
+});
