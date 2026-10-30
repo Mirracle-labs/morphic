@@ -981,9 +981,9 @@ export function ModelDetailView({ detail, isLoggedIn }: { detail: ModelDetail; i
                         <span className="tabular-nums text-neutral-900">{compact.format(v.tokens)}</span>
                       </div>
                       <div className="mt-1 h-1.5 rounded-full bg-neutral-200" aria-hidden="true">
-                        <div className="h-full rounded-full bg-neutral-900" style={{ width: `${(v.tokens / totalTokens) * 100}%` }} />
+                        <div className="h-full rounded-full bg-neutral-900" style={{ width: `${totalTokens ? (v.tokens / totalTokens) * 100 : 0}%` }} />
                       </div>
-                      <div className="mt-0.5 text-xs text-neutral-600">{((v.tokens / totalTokens) * 100).toFixed(1)}% · {compact.format(v.requests)} request</div>
+                      <div className="mt-0.5 text-xs text-neutral-600">{(totalTokens ? (v.tokens / totalTokens) * 100 : 0).toFixed(1)}% · {compact.format(v.requests)} request</div>
                     </button>
                   </li>
                 ))}

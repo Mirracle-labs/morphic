@@ -62,14 +62,14 @@ test('token pack, then balance, then unlimited pass', async () => {
   const [bal] = await db.select().from(s.balances).where(eq(s.balances.userId, user.id));
   assert.equal(bal!.credits, 4_400);
 
-  // Unlimited pass: raw tokens, no multiplier, no credit revenue recorded.
+  // Unlimited pass: input-equivalent tokens (output weighted 4x/2x = 2), no credit revenue recorded.
   const passPkg = await pkg('unlimited', model.id);
-  await withTransaction((tx) => grantPackage(tx, { userId: user.id, pkg: passPkg, amount: 300, source: 'purchase', reference: run }));
+  await withTransaction((tx) => grantPackage(tx, { userId: user.id, pkg: passPkg, amount: 400, source: 'purchase', reference: run }));
   const c = await call(`${run}-c`, 100, 100);
   const [pass] = await db.select().from(s.entitlements).where(eq(s.entitlements.unlimited, true));
   assert.equal(c.r.sourceId, pass!.id);
   assert.equal(c.st.actualCredits, 0);
-  assert.equal(pass!.remaining, 100, '300 daily - 200 raw tokens');
+  assert.equal(pass!.remaining, 100, '400 daily - (100 in + 100 out x2)');
 
   // Over today's fair use → billed from balance instead of blocked.
   const d = await call(`${run}-d`, 100, 100);

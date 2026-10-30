@@ -572,7 +572,7 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
 
           {/* Currency / gateway switch. Locked once a payment is in flight. */}
           {status !== 'paid' && !resolving && status !== 'needs_review' && status !== 'failed' && (
-            <div role="radiogroup" aria-label={en ? 'Payment method' : 'Metode pembayaran'} className="grid grid-cols-2 gap-1 rounded-lg bg-neutral-100 p-1">
+            <div role="radiogroup" aria-label={en ? 'Payment method' : 'Metode pembayaran'} className="grid grid-cols-2 gap-1 rounded-2xl bg-neutral-100 p-1">
               {(
                 [
                   { id: 'duitku', label: 'QRIS', sub: `Rp${idrPrice.toLocaleString('id-ID')}` },
@@ -591,13 +591,13 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
                       setErrorMsg(null);
                     }}
                     className={cn(
-                      'flex min-h-12 flex-col items-start justify-center rounded-md px-3 text-left transition-colors cursor-pointer',
+                      'flex min-h-12 flex-col items-start justify-center rounded-xl px-3.5 text-left transition-colors cursor-pointer',
                       focusRing,
-                      active ? 'bg-white shadow-2xs' : 'hover:bg-white/60',
+                      active ? 'bg-neutral-950' : 'hover:bg-white',
                     )}
                   >
-                    <span className={cn('text-sm font-semibold', active ? 'text-neutral-950' : 'text-neutral-700')}>{opt.label}</span>
-                    <span className="font-mono text-xs text-neutral-600 tabular-nums">{opt.sub}</span>
+                    <span className={cn('text-[13px] font-semibold', active ? 'text-white' : 'text-neutral-800')}>{opt.label}</span>
+                    <span className={cn('font-mono text-xs tabular-nums', active ? 'text-neutral-300' : 'text-neutral-600')}>{opt.sub}</span>
                   </button>
                 );
               })}
@@ -829,8 +829,8 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
 
         {/* Footer: the one primary action for the current state, always in reach. */}
         {(() => {
-          const primary = cn('inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-neutral-950 px-4 text-sm font-semibold text-white hover:bg-neutral-800 cursor-pointer', focusRing);
-          const quiet = cn('inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-neutral-200 px-4 text-sm font-medium text-neutral-800 hover:border-neutral-300 cursor-pointer', focusRing);
+          const primary = cn('inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-full bg-neutral-950 px-4 text-[13px] font-semibold text-white hover:bg-neutral-800 cursor-pointer', focusRing);
+          const quiet = cn('inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-full border border-neutral-300 px-4 text-[13px] font-semibold text-neutral-950 hover:border-neutral-950 cursor-pointer', focusRing);
           let body: React.ReactNode = null;
           if (paymentProvider === 'duitku' && (status === 'idle' || status === 'error')) {
             body = (
@@ -856,7 +856,7 @@ export function CheckoutModal({ pkg, existingPayment, provider, giftCard, onClos
                   <RefreshCw className="h-4 w-4" aria-hidden="true" />
                   {en ? 'I have paid, check now' : 'Sudah bayar, cek sekarang'}
                 </button>
-                <button id="checkout-cancel-btn" type="button" onClick={onClose} className={cn('min-h-10 w-full rounded-lg text-sm text-neutral-600 hover:text-neutral-950 cursor-pointer', focusRing)}>
+                <button id="checkout-cancel-btn" type="button" onClick={onClose} className={cn('min-h-9 w-full rounded-full text-[13px] text-neutral-600 hover:text-neutral-950 cursor-pointer', focusRing)}>
                   {en ? 'Close, keep the invoice open' : 'Tutup, invoice tetap terbuka'}
                 </button>
               </>

@@ -68,7 +68,7 @@ export function PayPalButton({
           )}
           <PayPalButtons
             disabled={loading || isVerifying}
-            style={{ layout: 'vertical', shape: 'rect', label: 'pay' }}
+            style={{ layout: 'vertical', shape: 'pill', color: 'black', label: 'pay', height: 40 }}
             createOrder={async () => {
               if (isVerifying) {
                 throw new Error('Payment is currently verifying. Please wait.');

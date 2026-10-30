@@ -4,7 +4,7 @@ import { db, withTransaction } from './index.ts';
 import * as s from './schema.ts';
 import {
   estimateReservation,
-  RAW_TOKEN_PRICING,
+  passPricing,
   TOKEN_PACK_HOURS,
   tokensToCredits,
   type ModelPricing,
@@ -173,7 +173,7 @@ export async function reserve(input: {
   };
   const est = {
     credits: estimateReservation({ ...base, pricing: input.model.pricing }),
-    raw: estimateReservation({ ...base, pricing: RAW_TOKEN_PRICING }),
+    raw: estimateReservation({ ...base, pricing: passPricing(input.model.pricing) }),
   };
 
   return withTransaction(async (tx) => {
@@ -268,7 +268,7 @@ export async function settle(input: {
       throw new Error(`reservation ${input.reservation.id} not in reserved state`);
     }
 
-    // An unlimited pass is metered in raw tokens against its fair-use cap and was paid upfront.
+    // An unlimited pass is metered in input-equivalent tokens against its fair-use cap and was paid upfront.
     const [pass] =
       res.sourceType === 'entitlement' && res.sourceId
         ? await tx
@@ -276,7 +276,7 @@ export async function settle(input: {
             .from(s.entitlements)
             .where(and(eq(s.entitlements.id, res.sourceId), eq(s.entitlements.unlimited, true)))
         : [];
-    const pricing = pass ? RAW_TOKEN_PRICING : input.pricing;
+    const pricing = pass ? passPricing(input.pricing) : input.pricing;
     const actual =
       chargeable
         ? tokensToCredits(input.promptTokens, pricing.inputCreditsPer1m) +

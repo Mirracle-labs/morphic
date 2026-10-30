@@ -69,8 +69,16 @@ export const PRICE_MARKUP = 1.3;
 export const TOKEN_PACK_HOURS = 24 * 30;
 /** Unlimited passes only for models whose output multiplier stays at or under this. */
 export const UNLIMITED_MAX_OUTPUT_MULTIPLIER = 80;
-/** Unlimited passes bill raw tokens against their fair-use cap: no multiplier. */
-export const RAW_TOKEN_PRICING: ModelPricing = { inputCreditsPer1m: 1_000_000, outputCreditsPer1m: 1_000_000 };
+/**
+ * Unlimited passes meter input-equivalent tokens against their fair-use cap: an input token is 1,
+ * an output token counts at the model's own output/input price ratio. A day's cap then costs the
+ * same upstream whatever the prompt/completion mix, so a pass priced above its input cost cannot
+ * lose money on output-heavy use. Equal input/output prices meter raw tokens, as before.
+ */
+export function passPricing(p: ModelPricing): ModelPricing {
+  const ratio = p.inputCreditsPer1m > 0 ? Math.max(1, p.outputCreditsPer1m / p.inputCreditsPer1m) : 1;
+  return { inputCreditsPer1m: 1_000_000, outputCreditsPer1m: Math.ceil(1_000_000 * ratio) };
+}
 
 export const multiplier = (creditsPer1m: number) => creditsPer1m / 1_000_000;
 

@@ -9,6 +9,7 @@ import {
   costCreditsPer1m,
   sellCreditsPer1m,
   multiplier,
+  passPricing,
   BALANCE_CREDITS_PER_IDR,
   IDR_PER_1M_BASE_TOKENS,
 } from './credits.ts';
@@ -85,4 +86,15 @@ test('tokenomics: 1x = Rp 400/1M, markup 30%, floor 1x', () => {
   assert.equal(tokensToCredits(1_000, sellCreditsPer1m(costCreditsPer1m(10))), 588_250);
   // Balance is dearer than packs: Rp 4.000 of balance buys 8M, not 10M.
   assert.equal(4_000 * BALANCE_CREDITS_PER_IDR, 8_000_000);
+});
+
+test('unlimited passes meter input-equivalent tokens', () => {
+  // Equal prices (DeepSeek Local): raw tokens, unchanged.
+  assert.deepEqual(passPricing({ inputCreditsPer1m: 1_000_000, outputCreditsPer1m: 1_000_000 }), { inputCreditsPer1m: 1_000_000, outputCreditsPer1m: 1_000_000 });
+  // GLM 5.3 Flash sells 8.84x in / 31.2x out: one output token uses ~3.53 tokens of the cap.
+  const glm = passPricing({ inputCreditsPer1m: 8_840_000, outputCreditsPer1m: 31_200_000 });
+  assert.equal(glm.inputCreditsPer1m, 1_000_000);
+  assert.equal(glm.outputCreditsPer1m, 3_529_412);
+  // Output cheaper than input never discounts the cap below raw tokens.
+  assert.equal(passPricing({ inputCreditsPer1m: 4_000_000, outputCreditsPer1m: 2_000_000 }).outputCreditsPer1m, 1_000_000);
 });

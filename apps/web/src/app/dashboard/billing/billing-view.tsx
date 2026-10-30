@@ -159,7 +159,7 @@ export function BillingView({
   ];
   const segment = (active: boolean) =>
     cn(
-      'min-h-10 px-3.5 rounded-md text-sm whitespace-nowrap shrink-0 transition-colors cursor-pointer inline-flex items-center gap-2',
+      'min-h-8 px-3 rounded-md text-[13px] whitespace-nowrap shrink-0 transition-colors cursor-pointer inline-flex items-center gap-2',
       focusRing,
       active ? 'bg-white text-neutral-950 font-semibold shadow-2xs' : 'text-neutral-600 hover:text-neutral-950',
     );
@@ -176,13 +176,13 @@ export function BillingView({
             {tabs.map(([id, label, count]) => (
               <button key={id} type="button" aria-pressed={activeTab === id} onClick={() => handleTabChange(id)} className={segment(activeTab === id)}>
                 <span suppressHydrationWarning>{label}</span>
-                {count ? <span className="font-mono text-xs tabular-nums text-neutral-500">{count}</span> : null}
+                {count ? <span className="font-mono text-[11px] tabular-nums text-neutral-500">{count}</span> : null}
               </button>
             ))}
           </div>
           <Link
             href="/dashboard/redeem"
-            className={cn('inline-flex min-h-10 items-center rounded-md px-3 text-sm font-semibold text-neutral-950 hover:bg-neutral-100', focusRing)}
+            className={cn('inline-flex min-h-8 items-center rounded-md px-3 text-[13px] font-semibold text-neutral-950 hover:bg-neutral-100', focusRing)}
           >
             {en ? 'Redeem a code' : 'Tukar kode'}
           </Link>
@@ -209,7 +209,7 @@ export function BillingView({
                     type="button"
                     aria-label={en ? `Top up ${fmtPrice(p, usd)}` : `Isi saldo ${fmtPrice(p, usd)}`}
                     onClick={() => buy(p)}
-                    className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-5 text-sm font-semibold tabular-nums text-white transition-colors hover:bg-white hover:text-neutral-950 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
+                    className="inline-flex min-h-8 items-center rounded-full bg-white/10 px-3.5 text-[13px] font-semibold tabular-nums text-white transition-colors hover:bg-white hover:text-neutral-950 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
                   >
                     <span suppressHydrationWarning>+ {fmtPrice(p, usd)}</span>
                   </button>
@@ -251,7 +251,7 @@ export function BillingView({
                           type="button"
                           aria-label={en ? `Buy ${p.name}` : `Beli ${p.name}`}
                           onClick={() => buy(p)}
-                          className={cn('inline-flex min-h-11 items-center rounded-full bg-neutral-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
+                          className={cn('inline-flex min-h-8 items-center rounded-full bg-neutral-950 px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
                         >
                           <span suppressHydrationWarning>{en ? 'Buy' : 'Beli'}</span>
                         </button>
@@ -286,7 +286,7 @@ export function BillingView({
                       type="button"
                       aria-label={en ? `Buy ${p.name}` : `Beli ${p.name}`}
                       onClick={() => buy(p)}
-                      className={cn('inline-flex min-h-11 shrink-0 items-center rounded-full bg-neutral-950 px-5 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
+                      className={cn('inline-flex min-h-8 shrink-0 items-center rounded-full bg-neutral-950 px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-neutral-800 cursor-pointer', focusRing)}
                     >
                       <span suppressHydrationWarning className="sm:hidden">{fmtPrice(p, usd)}</span>
                       <span suppressHydrationWarning className="hidden sm:inline">{en ? 'Buy' : 'Beli'}</span>
