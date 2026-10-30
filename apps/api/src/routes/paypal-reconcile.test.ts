@@ -9,7 +9,7 @@
  * Two deliberate choices:
  *  - `WEBHOOK_IP_RPM` is pinned to a low value BEFORE `../app` is imported, because app.ts
  *    reads it at module load. The app is loaded lazily so this file controls that value.
- *  - Every request that should exercise the limiter carries a unique `cf-connecting-ip`;
+ *  - Every request that should exercise the limiter carries a unique `x-forwarded-for`;
  *    requests without one resolve to "unknown" and skip the limiter entirely, so the
  *    remaining webhook tests are never throttled by it.
  */
@@ -627,7 +627,8 @@ test('T5: the webhook surface rate-limits a single IP', async () => {
       for (let i = 0; i < 6; i++) {
         const res = await app.request('/webhooks/paypal', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip },
+          // The header nginx sets; CF-Connecting-IP is ignored unless TRUST_CF_CONNECTING_IP=1.
+          headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip },
           body: JSON.stringify({ id: `WH-RL-${runId()}`, event_type: 'PAYMENT.CAPTURE.COMPLETED' }),
         });
         statuses.push(res.status);

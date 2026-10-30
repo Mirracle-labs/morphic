@@ -30,6 +30,18 @@ async function seed() {
         credentialReference: 'env:MOONSHOT_API_KEY',
         status: 'active',
       },
+      {
+        name: 'chutes',
+        baseUrl: 'https://llm.chutes.ai/v1',
+        credentialReference: 'env:CHUTES_API_KEY',
+        status: 'active',
+      },
+      {
+        name: 'inceptron',
+        baseUrl: 'https://api.inceptron.io/v1',
+        credentialReference: 'env:INCEPTRON_API_KEY',
+        status: 'active',
+      },
     ])
     .onConflictDoNothing({ target: s.providers.name })
     .returning();

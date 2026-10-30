@@ -48,7 +48,8 @@ export default async function AdminProviders() {
     id: p.id,
     name: p.name,
     baseUrl: p.baseUrl,
-    encryptedCredentials: p.encryptedCredentials,
+    // Ciphertext stays on the server; the table only needs to know a key is stored.
+    hasEncryptedCredential: Boolean(p.encryptedCredentials),
     credentialReference: p.credentialReference,
     status: p.status as 'active' | 'disabled',
   }));

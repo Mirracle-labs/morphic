@@ -11,6 +11,7 @@
     "./models": "./src/models.ts",
     "./anthropic": "./src/anthropic.ts",
     "./provider-crypto": "./src/provider-crypto.ts",
+    "./model-readiness": "./src/model-readiness.ts",
     "./email": "./src/email.ts"
   },
   "scripts": {

@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
+import { readyModelIds } from '@morphic/shared/model-readiness';
 import { fetchBackendApi } from '@/lib/api-client';
 import { ModelsView } from './models-view';
 
@@ -19,22 +20,39 @@ export default async function ModelsPage() {
 
   if (models.length === 0) {
     try {
-      models = await db
-        .select({
-          publicModelId: s.models.publicModelId,
-          displayName: s.models.displayName,
-          description: s.models.description,
-          contextLength: s.models.contextLength,
-          capabilities: s.models.capabilities,
-          inputCreditsPer1m: s.models.inputCreditsPer1m,
-          outputCreditsPer1m: s.models.outputCreditsPer1m,
-          providerName: s.providers.name,
-          circuitBreakerState: s.providers.circuitBreakerState,
-          fallbackProviderId: s.models.fallbackProviderId,
-        })
-        .from(s.models)
-        .innerJoin(s.providers, eq(s.models.providerId, s.providers.id))
-        .where(eq(s.models.status, 'active'));
+      const [rows, providers, pool] = await Promise.all([
+        db
+          .select({
+            id: s.models.id,
+            providerId: s.models.providerId,
+            publicModelId: s.models.publicModelId,
+            displayName: s.models.displayName,
+            description: s.models.description,
+            contextLength: s.models.contextLength,
+            capabilities: s.models.capabilities,
+            inputCreditsPer1m: s.models.inputCreditsPer1m,
+            outputCreditsPer1m: s.models.outputCreditsPer1m,
+            providerName: s.providers.name,
+            circuitBreakerState: s.providers.circuitBreakerState,
+            fallbackProviderId: s.models.fallbackProviderId,
+          })
+          .from(s.models)
+          .innerJoin(s.providers, eq(s.models.providerId, s.providers.id))
+          .where(eq(s.models.status, 'active')),
+        db
+          .select({
+            id: s.providers.id,
+            status: s.providers.status,
+            encryptedCredentials: s.providers.encryptedCredentials,
+            credentialReference: s.providers.credentialReference,
+          })
+          .from(s.providers),
+        db
+          .select({ modelId: s.modelProviderPool.modelId, providerId: s.modelProviderPool.providerId, isEnabled: s.modelProviderPool.isEnabled })
+          .from(s.modelProviderPool),
+      ]);
+      const ready = readyModelIds(rows, providers, pool);
+      models = rows.map(({ id, providerId: _p, ...m }) => ({ ...m, ready: ready.has(id) }));
     } catch (err) {
       console.warn('[ModelsPage] Database fallback unavailable, showing empty catalog:', err);
     }

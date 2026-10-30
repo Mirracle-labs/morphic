@@ -123,12 +123,21 @@ test('P1-04: per-key 429 carries Retry-After and zero remaining', async () => {
 });
 
 // ── P2-04: trusted IP + per-IP gateway limit ─────────────────────────────────
-test('P2-04: spoofed X-Forwarded-For hops are ignored; CF-Connecting-IP wins', async () => {
+test('P2-04: spoofed X-Forwarded-For hops are ignored; CF-Connecting-IP wins only when trusted', async () => {
   const probe = new Hono();
   probe.get('/', (c) => c.text(getTrustedClientIp(c)));
   const ip = async (h: Record<string, string>) => (await probe.request('/', { headers: h })).text();
   assert.equal(await ip({ 'x-forwarded-for': '6.6.6.6, 203.0.113.5' }), '203.0.113.5');
-  assert.equal(await ip({ 'x-forwarded-for': '6.6.6.6', 'cf-connecting-ip': '198.51.100.7' }), '198.51.100.7');
+  // No Cloudflare in front (the default): a client-sent CF-Connecting-IP is forgeable, so it is ignored.
+  assert.equal(await ip({ 'x-forwarded-for': '6.6.6.6', 'cf-connecting-ip': '198.51.100.7' }), '6.6.6.6');
+  const prev = process.env.TRUST_CF_CONNECTING_IP;
+  process.env.TRUST_CF_CONNECTING_IP = '1';
+  try {
+    assert.equal(await ip({ 'x-forwarded-for': '6.6.6.6', 'cf-connecting-ip': '198.51.100.7' }), '198.51.100.7');
+  } finally {
+    if (prev === undefined) delete process.env.TRUST_CF_CONNECTING_IP;
+    else process.env.TRUST_CF_CONNECTING_IP = prev;
+  }
 });
 
 test('P2-04: gateway blocks an IP over its per-minute limit with 429 + Retry-After', async () => {

@@ -18,6 +18,7 @@
     "make-admin": "tsx src/make-admin.ts",
     "e2e": "tsx src/e2e.ts",
     "setup:manual": "tsx scripts/setup-manual-test.ts",
+    "pool:chutes-inceptron": "tsx scripts/pool-chutes-inceptron.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

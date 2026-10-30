@@ -3,6 +3,7 @@ import { db, schema as s } from '@morphic/db';
 import { requireAdmin } from '@/lib/actions';
 import { saveModel } from '@/lib/admin-actions';
 import { getServerTranslation } from '@/lib/i18n/server';
+import { readyModelIds } from '@morphic/shared/model-readiness';
 import { ModelsTable } from './models-table';
 import { Cpu, Plus } from 'lucide-react';
 
@@ -79,11 +80,16 @@ export default async function AdminModels() {
         providerCostOutputPer1m: s.models.providerCostOutputPer1m,
         status: s.models.status,
         providerName: s.providers.name,
+        fallbackProviderId: s.models.fallbackProviderId,
       })
       .from(s.models)
       .innerJoin(s.providers, eq(s.models.providerId, s.providers.id)),
     db.select().from(s.providers),
   ]);
+  const pool = await db
+    .select({ modelId: s.modelProviderPool.modelId, providerId: s.modelProviderPool.providerId, isEnabled: s.modelProviderPool.isEnabled })
+    .from(s.modelProviderPool);
+  const ready = readyModelIds(models, providers, pool);
 
   return (
     <div className="space-y-6 w-full">
@@ -249,7 +255,7 @@ export default async function AdminModels() {
       </div>
 
       {/* Model Table */}
-      <ModelsTable models={models} providers={providers} />
+      <ModelsTable models={models.map(({ fallbackProviderId: _f, ...m }) => ({ ...m, ready: ready.has(m.id) }))} providers={providers.map((p) => ({ id: p.id, name: p.name }))} />
     </div>
   );
 }

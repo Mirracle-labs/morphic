@@ -33,6 +33,18 @@ test('openrouter: per-token strings become per 1M', () => {
   assert.equal(m!.maxOutput, 943718);
 });
 
+test('inceptron: per-token strings, cache read spelled input_cache_reads', () => {
+  const [m] = normalizeCatalog({
+    data: [{
+      id: 'zai-org/GLM-5.3',
+      pricing: { prompt: '0.0000012', completion: '0.0000022', input_cache_reads: '0.00000014' },
+      context_length: 1048576,
+      max_output_length: 1048576,
+    }],
+  });
+  assert.deepEqual(m, { id: 'zai-org/GLM-5.3', inputPerM: 1.2, cacheReadPerM: 0.14, outputPerM: 2.2, context: 1048576, maxOutput: 1048576 });
+});
+
 test('chutes: price.*.usd is per 1M, not per token', () => {
   const [m] = normalizeCatalog({
     data: [{

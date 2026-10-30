@@ -19,6 +19,8 @@ interface ModelRow {
   providerCostInputPer1m: number | null;
   providerCostOutputPer1m: number | null;
   status: string;
+  /** Some provider on its route has a key (see lib/model-readiness) */
+  ready: boolean;
   providerName: string;
   providerId?: string;
 }
@@ -353,7 +355,15 @@ export function ModelsTable({ models, providers }: {
                       )}
                     </td>
                     <td className="py-3 px-3 whitespace-nowrap">
-                      {m.status === 'active' ? (
+                      {m.status === 'active' && !m.ready ? (
+                        <span
+                          title="Belum ada provider dengan API key untuk model ini"
+                          className="inline-flex items-center gap-1.5 font-mono text-[11px] font-medium text-amber-800"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" aria-hidden="true" />
+                          unready
+                        </span>
+                      ) : m.status === 'active' ? (
                         <span className="inline-flex items-center gap-1.5 font-mono text-[11px] font-medium text-neutral-700">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" aria-hidden="true" />
                           {t.admin.status.active}

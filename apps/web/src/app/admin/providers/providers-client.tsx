@@ -26,7 +26,7 @@ export interface ProviderRow {
   id: string;
   name: string;
   baseUrl: string;
-  encryptedCredentials: string | null;
+  hasEncryptedCredential: boolean;
   credentialReference: string | null;
   status: 'active' | 'disabled';
 }
@@ -366,7 +366,7 @@ export function ProvidersClient({ initialProviders, stats }: ProvidersClientProp
                     <span className="truncate max-w-xs block select-all">{p.baseUrl}</span>
                   </td>
                   <td className="py-3 px-3 font-mono text-xs text-neutral-500">
-                    {p.encryptedCredentials ? (
+                    {p.hasEncryptedCredential ? (
                       <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">
                         <Check className="w-3 h-3" />
                         <span>terenkripsi</span>

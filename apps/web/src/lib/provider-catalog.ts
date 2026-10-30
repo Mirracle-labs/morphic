@@ -46,11 +46,11 @@ function prices(m: Json): Pick<CatalogModel, 'inputPerM' | 'cacheReadPerM' | 'ou
       outputPerM: num(p.completion?.price_per_m_decimal),
     };
   }
-  // OpenRouter: pricing.prompt is USD per token as a string
+  // OpenRouter / Inceptron: pricing.prompt is USD per token as a string (Inceptron spells it input_cache_reads)
   if (p && typeof p.prompt === 'string') {
     return {
       inputPerM: perTokenToPerM(p.prompt),
-      cacheReadPerM: perTokenToPerM(p.input_cache_read),
+      cacheReadPerM: perTokenToPerM(p.input_cache_read ?? p.input_cache_reads),
       outputPerM: perTokenToPerM(p.completion),
     };
   }

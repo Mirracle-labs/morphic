@@ -41,8 +41,16 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
     };
     const caps = new Set<string>();
     initialModels.forEach((m) => (m.capabilities ?? []).forEach((c: string) => caps.add(c.toLowerCase())));
+    const readyCount = initialModels.filter((m) => m.ready !== false).length;
     return [
       { id: 'All', label: t.dashboard.filterAllCap },
+      // Route availability, not a capability tag; shown only when the catalog has both kinds.
+      ...(readyCount > 0 && readyCount < initialModels.length
+        ? [
+            { id: 'ready', label: `Ready (${readyCount})` },
+            { id: 'unready', label: `Unready (${initialModels.length - readyCount})` },
+          ]
+        : []),
       ...[...caps].sort().map((c) => ({ id: c, label: labels[c]?.[locale === 'en' ? 'en' : 'id'] ?? c })),
     ];
   }, [initialModels, locale, t.dashboard.filterAllCap]);
@@ -58,6 +66,8 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
 
       const matchCap =
         selectedCap === 'All' ||
+        (selectedCap === 'ready' && m.ready !== false) ||
+        (selectedCap === 'unready' && m.ready === false) ||
         (m.capabilities && m.capabilities.some((c: string) => c.toLowerCase() === selectedCap));
 
       return matchSearch && matchCap;
@@ -261,7 +271,15 @@ export function ModelsView({ initialModels }: { initialModels: any[] }) {
 
                     {/* Status */}
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {m.circuitBreakerState?.state === 'open' ? (
+                      {m.ready === false ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-neutral-100 text-neutral-600 border border-neutral-200/80 shadow-2xs"
+                          title={locale === 'en' ? 'No upstream provider is connected for this model yet' : 'Belum ada provider upstream yang terhubung untuk model ini'}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-neutral-400" />
+                          <span>Unready</span>
+                        </span>
+                      ) : m.circuitBreakerState?.state === 'open' ? (
                         <span
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs"
                           title={locale === 'en' ? 'Upstream degraded, automatically routed via fallback provider' : 'Upstream terganggu, otomatis dialihkan via rute cadangan'}
