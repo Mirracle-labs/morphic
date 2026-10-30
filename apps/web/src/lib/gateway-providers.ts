@@ -10,8 +10,8 @@ export const GATEWAY_PROVIDERS = [
   { key: 'moonshot', label: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', host: 'moonshot.', logo: '/logos/moonshot.svg' },
   { key: 'minimax', label: 'MiniMax', baseUrl: 'https://api.minimax.chat/v1', host: 'minimax', logo: '/logos/minimax-color.svg' },
   { key: 'alibaba', label: 'Alibaba Cloud', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', host: 'aliyuncs.com', logo: '/logos/alibabacloud-color.svg' },
-  { key: 'chutes', label: 'Chutes', baseUrl: 'https://llm.chutes.ai/v1', host: 'chutes.ai', logo: null },
-  { key: 'inceptron', label: 'Inceptron', baseUrl: 'https://api.inceptron.io/v1', host: 'inceptron.io', logo: null },
+  { key: 'chutes', label: 'Chutes', baseUrl: 'https://llm.chutes.ai/v1', host: 'chutes.ai', logo: '/logos/chutes.svg' },
+  { key: 'inceptron', label: 'Inceptron', baseUrl: 'https://api.inceptron.io/v1', host: 'inceptron.io', logo: '/logos/inceptron-color.svg' },
   { key: 'ollama', label: 'Ollama (Local)', baseUrl: 'http://localhost:11434/v1', host: ':11434', logo: '/logos/ollama.svg' },
 ] as const;
 

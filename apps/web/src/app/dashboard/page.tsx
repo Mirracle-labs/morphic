@@ -1,7 +1,9 @@
 import { eq, sql, desc, and, or, gt, isNull } from 'drizzle-orm';
 import { getSessionWithRetry } from '@/lib/actions';
 import { db, schema as s } from '@morphic/db';
+import { readyModelIds } from '@morphic/shared/model-readiness';
 import DeveloperGateway, { ModelItem } from '@/components/DeveloperGateway';
+import { AutoRefresh } from '@/components/AutoRefresh';
 
 /**
  * Fetches active AI models and their provider info directly from PostgreSQL.
@@ -180,18 +182,37 @@ async function loadDailySpend(userId: string): Promise<Array<{ day: string; cred
 
 async function loadModelStats() {
   try {
-    const [row] = await db
-      .select({
-        count: sql<number>`count(*)::int`,
-        avgCreditsPer1m: sql<number>`coalesce(avg((${s.models.inputCreditsPer1m} + ${s.models.outputCreditsPer1m}) / 2.0), 0)::float`,
-        minInputRate: sql<number>`coalesce(min(${s.models.inputCreditsPer1m}), 0)::bigint`,
-      })
-      .from(s.models)
-      .where(eq(s.models.status, 'active'));
+    const [models, providers, pool] = await Promise.all([
+      db
+        .select({
+          id: s.models.id,
+          providerId: s.models.providerId,
+          fallbackProviderId: s.models.fallbackProviderId,
+          inputCreditsPer1m: s.models.inputCreditsPer1m,
+          outputCreditsPer1m: s.models.outputCreditsPer1m,
+        })
+        .from(s.models)
+        .where(eq(s.models.status, 'active')),
+      // Credential columns only decide readiness; they never reach the page.
+      db
+        .select({
+          id: s.providers.id,
+          status: s.providers.status,
+          encryptedCredentials: s.providers.encryptedCredentials,
+          credentialReference: s.providers.credentialReference,
+        })
+        .from(s.providers),
+      db
+        .select({ modelId: s.modelProviderPool.modelId, providerId: s.modelProviderPool.providerId, isEnabled: s.modelProviderPool.isEnabled })
+        .from(s.modelProviderPool),
+    ]);
+    // Only models a request can actually be routed to count as ready.
+    const ids = readyModelIds(models, providers, pool);
+    const ready = models.filter((m) => ids.has(m.id));
     return {
-      modelCount: row?.count ?? 0,
-      avgCreditsPer1m: Number(row?.avgCreditsPer1m ?? 0),
-      minInputRate: Number(row?.minInputRate ?? 0),
+      modelCount: ready.length,
+      avgCreditsPer1m: ready.length ? ready.reduce((a, m) => a + (m.inputCreditsPer1m + m.outputCreditsPer1m) / 2, 0) / ready.length : 0,
+      minInputRate: ready.length ? Math.min(...ready.map((m) => m.inputCreditsPer1m)) : 0,
     };
   } catch (err) {
     console.warn('[DashboardPage] Database offline, showing empty model stats:', err);
@@ -219,18 +240,22 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <DeveloperGateway
-      session={session}
-      userBalance={balance.credits}
-      balanceUpdatedAt={balance.updatedAt}
-      initialModels={initialModels}
-      recentRequests={recentRequests}
-      serverModelCount={modelStats.modelCount}
-      serverAvgCreditsPer1m={modelStats.avgCreditsPer1m}
-      serverMinInputRate={modelStats.minInputRate}
-      activeKeys={activeKeys}
-      serverUsage={usage}
-      dailySpend={dailySpend}
-    />
+    <>
+      {/* Balance, usage, recent requests and model stats stay current while the tab is open. */}
+      <AutoRefresh intervalMs={30_000} />
+      <DeveloperGateway
+        session={session}
+        userBalance={balance.credits}
+        balanceUpdatedAt={balance.updatedAt}
+        initialModels={initialModels}
+        recentRequests={recentRequests}
+        serverModelCount={modelStats.modelCount}
+        serverAvgCreditsPer1m={modelStats.avgCreditsPer1m}
+        serverMinInputRate={modelStats.minInputRate}
+        activeKeys={activeKeys}
+        serverUsage={usage}
+        dailySpend={dailySpend}
+      />
+    </>
   );
 }

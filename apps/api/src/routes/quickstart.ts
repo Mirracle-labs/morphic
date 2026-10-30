@@ -1,6 +1,7 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { db, schema as s } from '@morphic/db';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
+import { readyModelIds } from '@morphic/shared/model-readiness';
 
 /**
  * Public install scripts: `curl -fsSL <url> | bash` (macOS/Linux) and `irm <url> | iex`
@@ -215,4 +216,113 @@ ${modelsJson}
   });
 });
 
-export { quickstart };
+// ── OpenCode well-known remote config ───────────────────────────────────────
+// `opencode auth login <gateway>` fetches <gateway>/.well-known/opencode once, runs `auth.command`
+// to read the user's key and stores it locally under `auth.env`. On EVERY start opencode fetches
+// this document again and merges `config`, so new Morphic models appear without editing any file.
+// Only routable (ready) models are listed. The key never reaches this endpoint: `{env:...}` is
+// resolved by opencode on the user's machine. Windows has no /dev/tty, so it logs in via the
+// /windows prefix, which serves a PowerShell prompt instead.
+
+const OPENCODE_ENV = 'MORPHIC_API_KEY';
+const KEY_PROMPT = 'Morphic API key (mp-...): ';
+const OUTPUT_CAP = Number(process.env.HARD_RESERVE_CAP ?? 16384);
+
+type OpencodeModel = {
+  name: string;
+  limit: { context: number; output: number };
+  reasoning: boolean;
+  tool_call: boolean;
+  attachment: boolean;
+};
+let readyCache: { at: number; models: Record<string, OpencodeModel> } | null = null;
+
+async function readyOpencodeModels() {
+  if (readyCache && Date.now() - readyCache.at < CACHE_MS) return readyCache.models;
+  const [models, providers, pool] = await Promise.all([
+    db
+      .select({
+        id: s.models.id,
+        providerId: s.models.providerId,
+        fallbackProviderId: s.models.fallbackProviderId,
+        publicModelId: s.models.publicModelId,
+        displayName: s.models.displayName,
+        contextLength: s.models.contextLength,
+        capabilities: s.models.capabilities,
+      })
+      .from(s.models)
+      .where(eq(s.models.status, 'active')),
+    // Credential columns only decide readiness; nothing from them is returned.
+    db
+      .select({
+        id: s.providers.id,
+        status: s.providers.status,
+        encryptedCredentials: s.providers.encryptedCredentials,
+        credentialReference: s.providers.credentialReference,
+      })
+      .from(s.providers),
+    db
+      .select({
+        modelId: s.modelProviderPool.modelId,
+        providerId: s.modelProviderPool.providerId,
+        isEnabled: s.modelProviderPool.isEnabled,
+        maxOutputTokens: s.modelProviderPool.maxOutputTokens,
+      })
+      .from(s.modelProviderPool)
+      .orderBy(asc(s.modelProviderPool.priority)),
+  ]);
+  const ready = readyModelIds(models, providers, pool);
+  const maxOut = new Map<string, number>();
+  for (const p of pool) if (p.isEnabled && p.maxOutputTokens && !maxOut.has(p.modelId)) maxOut.set(p.modelId, p.maxOutputTokens);
+  const out = Object.fromEntries(
+    models
+      .filter((m) => ready.has(m.id))
+      .map((m) => {
+        const caps = (m.capabilities ?? []).map((c) => c.toLowerCase());
+        return [
+          m.publicModelId,
+          {
+            name: m.displayName,
+            limit: { context: m.contextLength, output: Math.min(maxOut.get(m.id) ?? OUTPUT_CAP, OUTPUT_CAP, m.contextLength) },
+            reasoning: caps.includes('reasoning'),
+            tool_call: !caps.includes('no-tools'),
+            attachment: caps.includes('multimodal') || caps.includes('vision'),
+          },
+        ];
+      }),
+  );
+  readyCache = { at: Date.now(), models: out };
+  return out;
+}
+
+const opencodeWellKnown = (command: string[]) => async (c: Context) =>
+  c.json(
+    {
+      auth: { command, env: OPENCODE_ENV },
+      config: {
+        provider: {
+          morphic: {
+            npm: '@ai-sdk/openai-compatible',
+            name: 'Morphic',
+            options: { baseURL: gatewayBase(c), apiKey: `{env:${OPENCODE_ENV}}` },
+            models: await readyOpencodeModels(),
+          },
+        },
+      },
+    },
+    200,
+    // Same document for everyone; a short shared cache keeps opencode start-ups cheap.
+    { 'Cache-Control': 'public, max-age=60' },
+  );
+
+const wellKnown = new Hono();
+wellKnown.get(
+  '/.well-known/opencode',
+  opencodeWellKnown(['sh', '-c', `printf '${KEY_PROMPT}' >&2; read -r k </dev/tty; printf '%s' "$k"`]),
+);
+wellKnown.get(
+  '/windows/.well-known/opencode',
+  opencodeWellKnown(['powershell', '-NoProfile', '-Command', `$k = Read-Host '${KEY_PROMPT.trim()}'; [Console]::Out.Write($k)`]),
+);
+
+export { quickstart, wellKnown };

@@ -65,7 +65,9 @@ export function packageSummary(pkg: BillingPackage, en: boolean): string {
 /** A model price (credits per 1M) as its token multiplier: "520x", "5,2x". */
 export function fmtMultiplier(per1m: number, en = false): string {
   const x = multiplier(per1m);
-  return `${x.toLocaleString(en ? 'en-US' : 'id-ID', { maximumFractionDigits: x < 10 ? 1 : 0 })}x`;
+  // Below 0.1x one decimal would round a real price down to "0x"; keep two significant digits.
+  const opts = x > 0 && x < 0.1 ? { maximumSignificantDigits: 2 } : { maximumFractionDigits: x < 10 ? 1 : 0 };
+  return `${x.toLocaleString(en ? 'en-US' : 'id-ID', opts)}x`;
 }
 
 /** What 1M tokens of that model cost out of a token pack: "Rp208.000/1M". */

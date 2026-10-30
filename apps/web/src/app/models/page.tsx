@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { headers } from 'next/headers';
-import { eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db, schema as s } from '@morphic/db';
 import { getSessionSafe } from '@/lib/auth';
@@ -25,7 +25,7 @@ const HOURS = 24;
 /** Snapshot catalog overlaid with our active models and their real traffic: 7-day tokens and 24 hourly success buckets. */
 async function loadCatalog(): Promise<CatalogModel[]> {
   const fallback = alias(s.providers, 'fallback_provider');
-  const [models, volume, hourly] = await Promise.all([
+  const [models, volume, hourly, pool] = await Promise.all([
     db
       .select({
         id: s.models.id,
@@ -66,7 +66,16 @@ async function loadCatalog(): Promise<CatalogModel[]> {
       .from(s.requestLogs)
       .where(sql`${s.requestLogs.createdAt} > now() - interval '${sql.raw(String(HOURS))} hours'`)
       .groupBy(sql`1, 2`),
+    // Enabled pool entries are the routes actually tried, in order.
+    db
+      .select({ modelId: s.modelProviderPool.modelId, name: s.providers.name, baseUrl: s.providers.baseUrl })
+      .from(s.modelProviderPool)
+      .innerJoin(s.providers, eq(s.modelProviderPool.providerId, s.providers.id))
+      .where(and(eq(s.modelProviderPool.isEnabled, true), eq(s.providers.status, 'active')))
+      .orderBy(asc(s.modelProviderPool.priority)),
   ]);
+  const poolBy = new Map<string, { name: string; baseUrl: string }[]>();
+  for (const p of pool) poolBy.set(p.modelId, [...(poolBy.get(p.modelId) ?? []), p]);
 
   const tokensBy = new Map(volume.map((v) => [v.modelId, Number(v.tokens)]));
   const bucketsBy = new Map<string, { total: number; errors: number }[]>();
@@ -83,9 +92,12 @@ async function loadCatalog(): Promise<CatalogModel[]> {
     capabilities: m.capabilities ?? [],
     maker: makerFromId(m.publicModelId),
     providers: [
-      providerBrand(providerName, providerBaseUrl),
-      ...(fallbackName ? [providerBrand(fallbackName, fallbackBaseUrl)] : []),
-    ],
+      { name: providerName, baseUrl: providerBaseUrl },
+      ...(poolBy.get(id) ?? []),
+      ...(fallbackName ? [{ name: fallbackName, baseUrl: fallbackBaseUrl! }] : []),
+    ]
+      .filter((p, i, all) => all.findIndex((q) => q.name === p.name) === i)
+      .map((p) => providerBrand(p.name, p.baseUrl)),
     tokens7d: tokensBy.get(id) ?? 0,
     hourly: bucketsBy.get(id) ?? Array.from({ length: HOURS }, () => ({ total: 0, errors: 0 })),
   }));

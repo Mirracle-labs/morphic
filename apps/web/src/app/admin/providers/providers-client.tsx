@@ -6,6 +6,7 @@ import type { CatalogResult } from '@/lib/provider-catalog';
 import { CatalogTable } from './provider-catalog';
 import { useTranslation } from '@/lib/i18n';
 import { GATEWAY_PROVIDERS } from '@/lib/gateway-providers';
+import { indexText, useTableSearch } from '@/lib/table-search';
 import {
   Activity,
   Server,
@@ -67,6 +68,14 @@ export function ProvidersClient({ initialProviders, stats }: ProvidersClientProp
   });
 
   const [isPending, startTransition] = useTransition();
+  const search = useTableSearch(initialProviders, (p) =>
+    indexText(
+      p.name,
+      p.baseUrl,
+      p.status,
+      p.hasEncryptedCredential ? 'terenkripsi encrypted key' : p.credentialReference ? `env ${p.credentialReference}` : 'nokey',
+    ),
+  );
   const [preview, setPreview] = useState<CatalogResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -328,8 +337,25 @@ export function ProvidersClient({ initialProviders, stats }: ProvidersClientProp
         </div>
       </div>
 
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <label className="relative flex-1">
+          <span className="sr-only">Cari provider</span>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" aria-hidden="true" />
+          <input
+            type="search"
+            value={search.query}
+            onChange={(e) => search.setQuery(e.target.value)}
+            placeholder="Cari provider, URL, status… misal: chutes, disabled, nokey"
+            className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-neutral-200 bg-white font-mono text-neutral-900 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+          />
+        </label>
+        <span className="text-[11px] font-mono text-neutral-500 shrink-0" aria-live="polite">
+          {search.filtered.length} / {initialProviders.length} provider
+        </span>
+      </div>
+
       {/* Providers Table Card */}
-      <div className="bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden">
+      <div className={`bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden ${search.pending ? 'opacity-70' : ''}`}>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -352,7 +378,7 @@ export function ProvidersClient({ initialProviders, stats }: ProvidersClientProp
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {initialProviders.map((p) => (
+              {search.filtered.map((p) => (
                 <tr key={p.id} className="hover:bg-neutral-50/60 transition-colors">
                   <td className="py-3 px-4 font-semibold text-neutral-950">
                     <div className="flex items-center gap-2">
@@ -420,6 +446,13 @@ export function ProvidersClient({ initialProviders, stats }: ProvidersClientProp
                   </td>
                 </tr>
               ))}
+              {initialProviders.length > 0 && search.filtered.length === 0 && search.query.trim() && (
+                <tr>
+                  <td colSpan={5} className="py-10 text-center text-xs text-neutral-500 font-mono">
+                    Tidak ada provider yang cocok dengan &quot;{search.query.trim()}&quot;.
+                  </td>
+                </tr>
+              )}
               {initialProviders.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-10 text-center text-xs text-neutral-500 font-mono">

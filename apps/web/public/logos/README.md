@@ -32,6 +32,8 @@ Fetched with webfetch on 2026-09-09 from the upstream `master` branch:
 | `ollama.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/ollama.svg (fetched 2026-10-20) |
 | `alibabacloud-color.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/alibabacloud-color.svg (fetched 2026-10-20) |
 | `moonshot.svg` | https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/moonshot.svg (fetched 2026-10-20) |
+| `chutes.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/chutes.svg (fetched 2026-10-30) |
+| `inceptron-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/inceptron-color.svg (fetched 2026-10-30) |
 
 License source (also fetched with webfetch):
 https://raw.githubusercontent.com/lobehub/lobe-icons/master/LICENSE

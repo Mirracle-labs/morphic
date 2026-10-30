@@ -10,7 +10,7 @@ import { account } from './routes/account';
 import { payments } from './routes/payments';
 import { redeem } from './routes/redeem';
 import { catalog } from './routes/catalog';
-import { quickstart } from './routes/quickstart';
+import { quickstart, wellKnown } from './routes/quickstart';
 import { requestId } from './middleware/request-id';
 import { getTrustedClientIp, isLoopbackIp } from './lib/ip';
 import { checkRateLimit } from './ratelimit';
@@ -103,6 +103,7 @@ app.onError((err, c) => {
 
 app.get('/health', (c) => c.json({ ok: true }));
 app.route('/quickstart', quickstart);
+app.route('/', wellKnown);
 app.route('/webhooks', webhooks);
 app.route('/v1/keys', keys);
 app.route('/v1/account', account);

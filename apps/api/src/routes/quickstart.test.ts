@@ -34,3 +34,24 @@ test('GET /quickstart/opencode.ps1 returns PowerShell script with correct header
   assert.ok(text.includes('morphic/deepseek-v4'));
 });
 
+
+test('GET /.well-known/opencode: login command + remote provider config, key stays a placeholder', async () => {
+  delete process.env.NEXT_PUBLIC_GATEWAY_URL;
+  for (const [path, shell] of [['/.well-known/opencode', 'sh'], ['/windows/.well-known/opencode', 'powershell']] as const) {
+    const res = await app.request(`https://morphic-api.web.id${path}`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.auth.env, 'MORPHIC_API_KEY');
+    assert.equal(body.auth.command[0], shell);
+    const provider = body.config.provider.morphic;
+    assert.equal(provider.npm, '@ai-sdk/openai-compatible');
+    assert.equal(provider.options.baseURL, 'https://morphic-api.web.id/v1');
+    // opencode substitutes the stored key locally; the gateway never sees or serves it.
+    assert.equal(provider.options.apiKey, '{env:MORPHIC_API_KEY}');
+    for (const m of Object.values(provider.models) as { limit: { context: number; output: number } }[]) {
+      assert.ok(m.limit.output > 0 && m.limit.output <= m.limit.context);
+    }
+    // Nothing credential-shaped besides that placeholder.
+    assert.ok(!JSON.stringify(body).replaceAll('{env:MORPHIC_API_KEY}', '').match(/encrypted|credential|env:/i));
+  }
+});

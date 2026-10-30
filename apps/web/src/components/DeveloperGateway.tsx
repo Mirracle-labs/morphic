@@ -82,8 +82,8 @@ export default function DeveloperGateway({
   const balance = userBalance;
   const balanceUpdatedAtState = balanceUpdatedAt;
 
-  // Recent requests (may be overridden by real-time data in the future)
-  const [recentRequests] = useState<RecentRequestItem[]>(initialRecentRequests);
+  // Read straight from props so each AutoRefresh render shows the latest requests.
+  const recentRequests: RecentRequestItem[] = initialRecentRequests;
 
   // Derived metrics from active model list / server data
   const activeKeys = serverActiveKeys ?? 0;

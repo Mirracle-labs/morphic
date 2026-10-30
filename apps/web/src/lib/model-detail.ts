@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
 import { providerBrand, type ProviderBrand } from './gateway-providers';
 import type { SnapshotModel } from './model-catalog';
@@ -98,8 +98,13 @@ export async function loadModelDetail(publicModelId: string): Promise<(ModelDeta
     .limit(1);
   if (!row) return null;
 
-  const [providerRows, hourly, daily, activity, siblings] = await Promise.all([
+  const [providerRows, pool, hourly, daily, activity, siblings] = await Promise.all([
     db.select({ id: s.providers.id, name: s.providers.name, baseUrl: s.providers.baseUrl }).from(s.providers),
+    db
+      .select({ providerId: s.modelProviderPool.providerId })
+      .from(s.modelProviderPool)
+      .where(and(eq(s.modelProviderPool.modelId, row.id), eq(s.modelProviderPool.isEnabled, true)))
+      .orderBy(asc(s.modelProviderPool.priority)),
     bucketQuery(row.id, 'hour', '24 hours'),
     bucketQuery(row.id, 'day', '7 days'),
     db
@@ -133,7 +138,10 @@ export async function loadModelDetail(publicModelId: string): Promise<(ModelDeta
     model: { ...model, capabilities: model.capabilities ?? [], createdAt: model.createdAt.toISOString() },
     providers: [
       ...(byId.get(providerId) ? [{ ...byId.get(providerId)!, role: 'primary' as const }] : []),
-      ...(fallbackProviderId && byId.get(fallbackProviderId) ? [{ ...byId.get(fallbackProviderId)!, role: 'fallback' as const }] : []),
+      // Pool entries are the backup routes tried in priority order after the primary.
+      ...[...pool.map((p) => p.providerId), fallbackProviderId]
+        .filter((id, i, all): id is string => Boolean(id) && id !== providerId && all.indexOf(id) === i && byId.has(id!))
+        .map((id) => ({ ...byId.get(id)!, role: 'fallback' as const })),
     ],
     brands,
     hourly: hourly.map(toBucket),

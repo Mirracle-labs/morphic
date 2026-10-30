@@ -4,6 +4,8 @@
 // Mapped only where the upstream price (2026-10-30 /models) is below the model's sell price and
 // its context covers the model's. A model that already routes through a keyed provider keeps it
 // as a pool row (`existing`), because enabled pool rows replace the legacy primary/fallback path.
+// A model whose primary provider has no key is re-pointed at its first pool entry, so admin and
+// the public catalog name the provider that really serves it, and the legacy (non-pool) path routes too.
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +87,29 @@ async function main() {
       console.log(`skip ${publicModelId}: model not found`);
       continue;
     }
+    const [primary] = await db.select().from(s.providers).where(eq(s.providers.id, model.providerId)).limit(1);
+    const ref = primary?.credentialReference;
+    const primaryHasKey = Boolean(primary?.encryptedCredentials) || Boolean(ref?.startsWith('env:') && process.env[ref.slice(4)]?.trim());
+    const first = entries.find((e): e is Entry => !('existing' in e) && e.priority === 1);
+    if (!primaryHasKey && first) {
+      const costIn = costCreditsPer1m(first.inUsd);
+      const costOut = costCreditsPer1m(first.outUsd);
+      if (costIn <= model.inputCreditsPer1m && costOut <= model.outputCreditsPer1m && first.context >= model.contextLength) {
+        await db
+          .update(s.models)
+          .set({
+            providerId: providerIds[first.provider]!,
+            providerModelId: first.providerModelId,
+            providerCostInputPer1m: costIn,
+            providerCostOutputPer1m: costOut,
+            // The legacy fallback reuses providerModelId, which differs per provider; the pool covers failover.
+            fallbackProviderId: null,
+          })
+          .where(eq(s.models.id, model.id));
+        console.log(`primary ${publicModelId}: ${primary?.name}:${model.providerModelId} -> ${first.provider}:${first.providerModelId}`);
+      }
+    }
+
     for (const e of entries) {
       if ('existing' in e) {
         const [prov] = await db.select({ id: s.providers.id }).from(s.providers).where(eq(s.providers.name, e.existing)).limit(1);

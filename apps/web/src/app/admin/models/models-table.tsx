@@ -3,7 +3,8 @@
 import { useState, useTransition } from 'react';
 import { saveModel, deleteModel } from '@/lib/admin-actions';
 import { useTranslation } from '@/lib/i18n';
-import { AlertTriangle, Check, Edit3, Loader2, Trash2, X } from 'lucide-react';
+import { indexText, useTableSearch } from '@/lib/table-search';
+import { AlertTriangle, Check, Edit3, Loader2, Search, Trash2, X } from 'lucide-react';
 
 interface Provider { id: string; name: string; }
 interface ModelRow {
@@ -255,6 +256,17 @@ export function ModelsTable({ models, providers }: {
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isPending, startTransition] = useTransition();
   const { t } = useTranslation();
+  const search = useTableSearch(models, (m) =>
+    indexText(
+      m.publicModelId,
+      m.providerModelId,
+      m.displayName,
+      m.providerName,
+      m.status,
+      m.status === 'active' ? (m.ready ? 'ready' : 'unready') : null,
+      ...m.capabilities,
+    ),
+  );
 
   const handleDeleteModel = () => {
     if (!selectedModelForDelete) return;
@@ -306,8 +318,25 @@ export function ModelsTable({ models, providers }: {
         </div>
       )}
 
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <label className="relative flex-1">
+          <span className="sr-only">Cari model</span>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" aria-hidden="true" />
+          <input
+            type="search"
+            value={search.query}
+            onChange={(e) => search.setQuery(e.target.value)}
+            placeholder="Cari model, provider, status… misal: kimi chutes, unready, k2.6"
+            className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-neutral-200 bg-white font-mono text-neutral-900 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-950"
+          />
+        </label>
+        <span className="text-[11px] font-mono text-neutral-500 shrink-0" aria-live="polite">
+          {search.filtered.length} / {models.length} model
+        </span>
+      </div>
+
       {/* Table Card */}
-      <div className="bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden">
+      <div className={`bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden ${search.pending ? 'opacity-70' : ''}`}>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -323,7 +352,7 @@ export function ModelsTable({ models, providers }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {models.map((m) =>
+              {search.filtered.map((m) =>
                 editingId === m.id ? (
                   <EditRow
                     key={m.id}
@@ -398,6 +427,13 @@ export function ModelsTable({ models, providers }: {
                     </td>
                   </tr>
                 )
+              )}
+              {search.filtered.length === 0 && search.query.trim() && (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-neutral-500">
+                    Tidak ada model yang cocok dengan &quot;{search.query.trim()}&quot;.
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
