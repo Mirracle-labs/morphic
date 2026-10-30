@@ -11,7 +11,9 @@ export default async function ModelsPage() {
 
   try {
     const res = await fetchBackendApi<{ data: any[] }>('/v1/catalog/models');
-    if (res.data?.data && res.data.data.length > 0) {
+    // An API build older than the readiness check omits `ready`; the DB path below computes it
+    // instead of every model defaulting to Ready.
+    if (res.data?.data && res.data.data.length > 0 && 'ready' in res.data.data[0]) {
       models = res.data.data;
     }
   } catch (err) {

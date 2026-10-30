@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { costCreditsPer1m } from '@morphic/shared/credits';
 
 const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+// --dry-run prints every change it would make and writes nothing (run it first against production).
+const DRY = process.argv.includes('--dry-run');
 config({ path: resolve(repoRoot, '.env'), quiet: true });
 
 const PROVIDERS = {
@@ -71,8 +73,15 @@ async function main() {
   const s = await import('../src/schema.ts');
   const { eq } = await import('drizzle-orm');
 
+  console.log(`database: ${new URL(process.env.DATABASE_URL!).hostname}${DRY ? ' (dry run, nothing is written)' : ''}`);
   const providerIds: Record<string, string> = {};
   for (const [name, p] of Object.entries(PROVIDERS)) {
+    if (DRY) {
+      const [row] = await db.select({ id: s.providers.id }).from(s.providers).where(eq(s.providers.name, name)).limit(1);
+      providerIds[name] = row?.id ?? `<new ${name}>`;
+      console.log(`${row ? 'exists' : 'would add'} provider ${name}`);
+      continue;
+    }
     const [row] = await db
       .insert(s.providers)
       .values({ name, ...p, status: 'active' })
@@ -95,7 +104,9 @@ async function main() {
       const costIn = costCreditsPer1m(first.inUsd);
       const costOut = costCreditsPer1m(first.outUsd);
       if (costIn <= model.inputCreditsPer1m && costOut <= model.outputCreditsPer1m && first.context >= model.contextLength) {
-        await db
+        if (DRY) {
+          console.log(`would set primary ${publicModelId}: ${primary?.name}:${model.providerModelId} -> ${first.provider}:${first.providerModelId}`);
+        } else await db
           .update(s.models)
           .set({
             providerId: providerIds[first.provider]!,
@@ -106,7 +117,7 @@ async function main() {
             fallbackProviderId: null,
           })
           .where(eq(s.models.id, model.id));
-        console.log(`primary ${publicModelId}: ${primary?.name}:${model.providerModelId} -> ${first.provider}:${first.providerModelId}`);
+        if (!DRY) console.log(`primary ${publicModelId}: ${primary?.name}:${model.providerModelId} -> ${first.provider}:${first.providerModelId}`);
       }
     }
 
@@ -115,6 +126,10 @@ async function main() {
         const [prov] = await db.select({ id: s.providers.id }).from(s.providers).where(eq(s.providers.name, e.existing)).limit(1);
         if (!prov) {
           console.log(`skip ${publicModelId} via ${e.existing}: provider not found`);
+          continue;
+        }
+        if (DRY) {
+          console.log(`would add ${publicModelId} -> ${e.existing}:${e.providerModelId} (p${e.priority}) unless present`);
           continue;
         }
         const inserted = await db
@@ -138,6 +153,10 @@ async function main() {
       // Never route at a loss or below the model's advertised context (D9).
       if (costIn > model.inputCreditsPer1m || costOut > model.outputCreditsPer1m || e.context < model.contextLength) {
         console.log(`skip ${publicModelId} via ${e.provider}: cost/context check failed`);
+        continue;
+      }
+      if (DRY) {
+        console.log(`would add ${publicModelId} -> ${e.provider}:${e.providerModelId} (p${e.priority}) unless present`);
         continue;
       }
       const inserted = await db
