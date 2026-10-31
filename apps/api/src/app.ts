@@ -16,6 +16,7 @@ import { getTrustedClientIp, isLoopbackIp } from './lib/ip';
 import { checkRateLimit } from './ratelimit';
 import { Scalar } from '@scalar/hono-api-reference';
 import { openApiApp } from './openapi/registry';
+import { handleResponses } from './responses';
 
 const app = new Hono();
 
@@ -114,6 +115,14 @@ app.route('/v1/redeem', redeem);
 app.route('/v1/catalog', catalog);
 if (process.env.ANTHROPIC_ENABLED === 'true') app.route('/v1', anthropic);
 app.route('/v1', v1);
+
+if (process.env.RESPONSES_API_ENABLED === 'true') {
+  app.post('/v1/responses', (c) =>
+    handleResponses(c.req.raw, async (body, headers) =>
+      app.request('/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) }),
+    ),
+  );
+}
 
 /**
  * Helper to determine if OpenAPI docs & specification should be publicly accessible.
