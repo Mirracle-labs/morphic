@@ -54,3 +54,69 @@ test('GET /health route remains healthy and unaffected', async () => {
   const data = (await res.json()) as { ok: boolean };
   assert.equal(data.ok, true);
 });
+
+test('Security Guard: /docs and /openapi.json are disabled in production (404 Not Found)', async () => {
+  const origNodeEnv = process.env.NODE_ENV;
+  const origEnableDocs = process.env.ENABLE_API_DOCS;
+  try {
+    process.env.NODE_ENV = 'production';
+    delete process.env.ENABLE_API_DOCS;
+
+    const resDocs = await app.request('/docs');
+    assert.equal(resDocs.status, 404);
+
+    const resDocsSlash = await app.request('/docs/');
+    assert.equal(resDocsSlash.status, 404);
+
+    const resSpec = await app.request('/openapi.json');
+    assert.equal(resSpec.status, 404);
+  } finally {
+    process.env.NODE_ENV = origNodeEnv;
+    if (origEnableDocs !== undefined) {
+      process.env.ENABLE_API_DOCS = origEnableDocs;
+    } else {
+      delete process.env.ENABLE_API_DOCS;
+    }
+  }
+});
+
+test('Security Guard: ENABLE_API_DOCS=true overrides production block', async () => {
+  const origNodeEnv = process.env.NODE_ENV;
+  const origEnableDocs = process.env.ENABLE_API_DOCS;
+  try {
+    process.env.NODE_ENV = 'production';
+    process.env.ENABLE_API_DOCS = 'true';
+
+    const resDocs = await app.request('/docs');
+    assert.equal(resDocs.status, 200);
+
+    const resSpec = await app.request('/openapi.json');
+    assert.equal(resSpec.status, 200);
+  } finally {
+    process.env.NODE_ENV = origNodeEnv;
+    if (origEnableDocs !== undefined) {
+      process.env.ENABLE_API_DOCS = origEnableDocs;
+    } else {
+      delete process.env.ENABLE_API_DOCS;
+    }
+  }
+});
+
+test('Security Guard: ENABLE_API_DOCS=false disables docs even in development/test', async () => {
+  const origEnableDocs = process.env.ENABLE_API_DOCS;
+  try {
+    process.env.ENABLE_API_DOCS = 'false';
+
+    const resDocs = await app.request('/docs');
+    assert.equal(resDocs.status, 404);
+
+    const resSpec = await app.request('/openapi.json');
+    assert.equal(resSpec.status, 404);
+  } finally {
+    if (origEnableDocs !== undefined) {
+      process.env.ENABLE_API_DOCS = origEnableDocs;
+    } else {
+      delete process.env.ENABLE_API_DOCS;
+    }
+  }
+});

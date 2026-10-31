@@ -115,7 +115,34 @@ app.route('/v1/catalog', catalog);
 if (process.env.ANTHROPIC_ENABLED === 'true') app.route('/v1', anthropic);
 app.route('/v1', v1);
 
+/**
+ * Helper to determine if OpenAPI docs & specification should be publicly accessible.
+ * In production (NODE_ENV=production), documentation endpoints (/docs, /openapi.json)
+ * are disabled by default to prevent attack surface enumeration and recon, unless
+ * explicitly enabled via ENABLE_API_DOCS=true.
+ */
+export const isDocsPubliclyAvailable = (): boolean => {
+  if (process.env.ENABLE_API_DOCS === 'true') return true;
+  if (process.env.ENABLE_API_DOCS === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+};
+
 // OpenAPI specification & interactive Scalar documentation
+// Blocked in production by default for security hardening (recon prevention).
+app.use('/docs*', async (c, next) => {
+  if (!isDocsPubliclyAvailable()) {
+    return c.text('Not Found', 404);
+  }
+  await next();
+});
+
+app.use('/openapi.json', async (c, next) => {
+  if (!isDocsPubliclyAvailable()) {
+    return c.text('Not Found', 404);
+  }
+  await next();
+});
+
 app.route('/', openApiApp);
 app.get(
   '/docs',
