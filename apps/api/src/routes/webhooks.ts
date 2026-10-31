@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { db, schema as s } from '@morphic/db';
 import { markPaymentIfOpen, processPaymentSuccess } from '@morphic/db/billing';
@@ -40,7 +41,7 @@ function verifyMockSignature(body: string, signature: string | undefined): boole
  * Payload: { event_id, payment_id, status: 'paid'|'failed' }
  * Idempotent: (provider, event_id) unique in payment_events; duplicate → 200 no-op.
  */
-webhooks.post('/mock', async (c) => {
+export async function handleWebhookMock(c: Context): Promise<Response> {
   if (process.env.NODE_ENV === 'production') {
     return c.json({ error: 'not found' }, 404);
   }
@@ -103,7 +104,9 @@ webhooks.post('/mock', async (c) => {
   }
 
   return c.json({ ok: true });
-});
+}
+
+webhooks.post('/mock', handleWebhookMock);
 
 /**
  * Duitku payment callback webhook.
@@ -116,7 +119,7 @@ webhooks.post('/mock', async (c) => {
  *
  * Docs: https://docs.duitku.com/api/id/#callback
  */
-webhooks.post('/duitku', async (c) => {
+export async function handleWebhookDuitku(c: Context): Promise<Response> {
   // Step 1: Parse x-www-form-urlencoded POST body payload from Duitku
   let formData: URLSearchParams;
   try {
@@ -146,7 +149,7 @@ webhooks.post('/duitku', async (c) => {
   };
 
   // Step 2: Verify signature using MD5(merchantCode + amount + merchantOrderId + apiKey)
-  if (!verifyCallbackSignature(payload as any)) {
+  if (!verifyCallbackSignature(payload)) {
     console.error('[webhook/duitku] invalid signature for merchantOrderId:', payload.merchantOrderId);
     return c.json({ ok: false, reason: 'invalid_signature' }, 401);
   }
@@ -208,8 +211,9 @@ webhooks.post('/duitku', async (c) => {
         });
         return c.json({ ok: false, reason: 'verification_failed' }, 400);
       }
-    } catch (verErr: any) {
-      console.error('[webhook/duitku] error verifying transaction status via API:', verErr?.message ?? verErr);
+    } catch (verErr: unknown) {
+      const err = verErr as Error;
+      console.error('[webhook/duitku] error verifying transaction status via API:', err?.message ?? err);
       return c.json({ ok: false, reason: 'gateway_verification_error' }, 502);
     }
 
@@ -251,7 +255,24 @@ webhooks.post('/duitku', async (c) => {
   }
 
   return c.json({ ok: true });
-});
+}
+
+webhooks.post('/duitku', handleWebhookDuitku);
+
+export interface PaypalWebhookPayload {
+  id?: string;
+  event_type?: string;
+  resource?: {
+    id?: string;
+    supplementary_data?: {
+      related_ids?: {
+        order_id?: string;
+      };
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
 
 /**
  * PayPal server-to-server webhook handler (Fix 1.4).
@@ -259,11 +280,11 @@ webhooks.post('/duitku', async (c) => {
  * Verifies PayPal transmission headers via PayPal REST API (/v1/notifications/verify-webhook-signature).
  * Handles PAYMENT.CAPTURE.COMPLETED and CHECKOUT.ORDER.APPROVED events idempotently.
  */
-webhooks.post('/paypal', async (c) => {
+export async function handleWebhookPaypal(c: Context): Promise<Response> {
   const rawText = await c.req.text();
-  let payload: any;
+  let payload: PaypalWebhookPayload;
   try {
-    payload = JSON.parse(rawText);
+    payload = JSON.parse(rawText) as PaypalWebhookPayload;
   } catch {
     return c.json({ error: 'invalid payload' }, 400);
   }
@@ -396,7 +417,9 @@ webhooks.post('/paypal', async (c) => {
   // Any other order-scoped event: record it for the audit trail only.
   await recordPaymentEvent({ provider: 'paypal', eventId, paymentId: payment.id, payload: safePayload });
   return c.json({ ok: true });
-});
+}
+
+webhooks.post('/paypal', handleWebhookPaypal);
 
 export { webhooks };
 

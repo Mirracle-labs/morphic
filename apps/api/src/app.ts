@@ -14,6 +14,8 @@ import { quickstart } from './routes/quickstart';
 import { requestId } from './middleware/request-id';
 import { getTrustedClientIp, isLoopbackIp } from './lib/ip';
 import { checkRateLimit } from './ratelimit';
+import { Scalar } from '@scalar/hono-api-reference';
+import { openApiApp } from './openapi/registry';
 
 const app = new Hono();
 
@@ -111,5 +113,16 @@ app.route('/v1/redeem', redeem);
 app.route('/v1/catalog', catalog);
 if (process.env.ANTHROPIC_ENABLED === 'true') app.route('/v1', anthropic);
 app.route('/v1', v1);
+
+// OpenAPI specification & interactive Scalar documentation
+app.route('/', openApiApp);
+app.get(
+  '/docs',
+  Scalar({
+    spec: { url: '/openapi.json' },
+    pageTitle: 'Morphic API Reference',
+    theme: 'saturn',
+  }),
+);
 
 export { app };
