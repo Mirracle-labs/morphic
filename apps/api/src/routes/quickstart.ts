@@ -1,4 +1,5 @@
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { db, schema as s } from '@morphic/db';
 import { asc, eq } from 'drizzle-orm';
 import { readyModelIds } from '@morphic/shared/model-readiness';
@@ -45,7 +46,7 @@ const gatewayBase = (c: { req: { url: string; header: (name: string) => string |
 const modelsMap = (models: Array<{ id: string; name: string }>) =>
   Object.fromEntries(models.map((m) => [m.id, { name: m.name }]));
 
-quickstart.get('/opencode.sh', async (c) => {
+export async function handleOpencodeBash(c: Context): Promise<Response> {
   const models = await activeModels();
   const defaultModel =
     models.find((m) => m.id.startsWith('deepseek-v4'))?.id ||
@@ -128,12 +129,14 @@ echo "  Run: opencode   then pick a model with /models"
     'Content-Type': 'text/x-shellscript; charset=utf-8',
     'Cache-Control': 'private, no-store',
   });
-});
+}
+
+quickstart.get('/opencode.sh', handleOpencodeBash);
 
 // Windows: same job as opencode.sh. Runs inside the user's own PowerShell session via
 // `irm ... | iex`, so it must never call `exit` (that would close their window): errors stop the
 // script block with `return`. Works on Windows PowerShell 5.1 and PowerShell 7.
-quickstart.get('/opencode.ps1', async (c) => {
+export async function handleOpencodePs1(c: Context): Promise<Response> {
   const models = await activeModels();
   const defaultModel =
     models.find((m) => m.id.startsWith('deepseek-v4'))?.id ||
@@ -214,7 +217,9 @@ ${modelsJson}
     'Content-Type': 'text/plain; charset=utf-8',
     'Cache-Control': 'private, no-store',
   });
-});
+}
+
+quickstart.get('/opencode.ps1', handleOpencodePs1);
 
 // ── OpenCode well-known remote config ───────────────────────────────────────
 // `opencode auth login <gateway>` fetches <gateway>/.well-known/opencode once, runs `auth.command`
